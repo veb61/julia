@@ -8,10 +8,11 @@ TESTS = all core keywordargs numbers strings unicode collections hashing	\
 	git pkg resolve suitesparse complex version pollfd mpfr	broadcast       \
 	socket floatapprox priorityqueue readdlm regex float16 combinatorics    \
 	sysinfo rounding ranges mod2pi euler show lineedit      \
-	replcompletions backtrace repl test goto
+	replcompletions backtrace repl test goto ccall
 
 default: all
 
+all ccall :: libccalltest.$(SHLIB_EXT)
 $(TESTS) ::
 	@$(call PRINT_JULIA, $(call spawn,$(JULIA_EXECUTABLE)) --check-bounds=yes -f ./runtests.jl $@)
 

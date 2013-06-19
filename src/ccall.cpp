@@ -831,8 +831,6 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
 #else
         attrs.push_back(AttributeWithIndex::get(1, Attribute::StructRet));
 #endif
-        fargt_sig.push_back(PointerType::get(lrt,0));
-        lrt = T_void;
         sret = 1;
     }
     size_t i;
@@ -962,10 +960,32 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
         jl_value_t *ty = expr_type(arg, ctx);
         if (jl_is_type_type(ty) && !jl_is_typevar(jl_tparam0(ty))) {
             int isleaf = jl_is_leaf_type(jl_tparam0(ty));
+
+    // make LLVM function object for the target
+    Value *llvmf;
+    JL_PRINTF(JL_STDOUT,"\n%s :",f_name);
+    FunctionType *functype = FunctionType::get(lrt, fargt_sig, isVa);
+    functype->dump();
+    if (jl_ptr != NULL) {
+        null_pointer_check(jl_ptr,ctx);
+        Type *funcptype = PointerType::get(functype,0);
+        llvmf = builder.CreateIntToPtr(jl_ptr, funcptype);
+    }
+    else if (fptr != NULL) {
+        Type *funcptype = PointerType::get(functype,0);
+        llvmf = literal_pointer_val(fptr, funcptype);
+    }
+    else {
+        void *symaddr;
+        if (f_lib != NULL)
+            symaddr = add_library_sym(f_name, f_lib);
+        else
+            symaddr = sys::DynamicLibrary::SearchForAddressOfSymbol(f_name);
+        if (symaddr == NULL) {
             JL_GC_POP();
             return ConstantInt::get(T_int32, isleaf);
+            }
         }
-    }
 
     // save place before arguments, for possible insertion of temp arg
     // area saving code.
