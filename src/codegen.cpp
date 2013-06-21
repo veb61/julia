@@ -676,12 +676,10 @@ void jl_cstyle_compile(jl_function_t *f)
 {
     jl_lambda_info_t *li = f->linfo;
     if (li->cFunctionObject == NULL) {
-        if (li->specFunctionObject == NULL) {
-            // objective: assign li->specFunctionObject
-            li->inCompile = 1;
-            (void)to_function(li, true, true);
-            li->inCompile = 0;
-        }
+        // objective: assign li->cFunctionObject
+        li->inCompile = 1;
+        (void)to_function(li, true, true);
+        li->inCompile = 0;
     }
 }
 
@@ -699,10 +697,10 @@ static Function *jl_cfunction_object(jl_function_t *f, jl_value_t *rt, jl_value_
         jl_is_leaf_type(argt)) {
         jl_function_t *ff = jl_get_specialization(f, (jl_tuple_t*)argt);
         if (ff != NULL && ff->env==(jl_value_t*)jl_null && ff->linfo != NULL) {
-            if (ff->linfo->specFunctionObject == NULL) {
+            if (ff->linfo->cFunctionObject == NULL) {
                 jl_cstyle_compile(ff);
             }
-            if (ff->linfo->specFunctionObject != NULL) {
+            if (ff->linfo->cFunctionObject != NULL) {
                 jl_lambda_info_t *li = ff->linfo;
                 if (!jl_types_equal((jl_value_t*)li->specTypes, argt)) {
                     jl_errorf("cfunction: type signature of %s does not match",
@@ -3399,7 +3397,7 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
             lam->functionObject = (void*)fwrap;
             lam->functionID = jl_assign_functionID(fwrap);
         }
-        if (cstyle && lam->functionObject == NULL)
+        if (cstyle && lam->cFunctionObject == NULL)
         {
             bool isVa = false;
 
@@ -3435,8 +3433,6 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
             Function *cw = Function::Create(FunctionType::get(sret?T_void:prt, fargt_sig, false), Function::ExternalLinkage,
                                    f->getName(), jl_Module);
 
-            lam->cFunctionObject = (void*)cw;
-
             BasicBlock *b0 = BasicBlock::Create(jl_LLVMContext, "top", cw);
 
             builder.SetInsertPoint(b0);
@@ -3461,8 +3457,26 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
                     // undo whatever we did to this poor function
                     args[i] = llvm_type_rewrite(v,fargt[i+sret],jl_tupleref(lam->specTypes,i));
                 }
+                // and perhaps box it if necessary
+                Type *t = julia_type_to_llvm(jl_tupleref(lam->specTypes,i));
+                if(t != fargt[i+sret])
+                {
+                    Value *mem = builder.CreateCall(
+                            jlallocobj_func,
+                            ConstantInt::get(T_size,
+                                sizeof(void*)+((jl_datatype_t*)rt)->size));
+                    //TODO: Fill type pointer fields with C_NULL's
+                    builder.CreateStore(
+                            literal_pointer_val((jl_value_t*)rt),
+                            emit_nthptr_addr(mem, (size_t)0));
+                    builder.CreateStore(v,builder.CreateBitCast(
+                        emit_nthptr_addr(mem, (size_t)1),v->getType()->getPointerTo()));
+
+                    args[i] = builder.CreateBitCast(mem,jl_pvalue_llvmt);
+                }
             }
 
+            //f->dump();
             Value *r = builder.CreateCall(f, ArrayRef<Value*>(&args[0], nargs));
             
             bool mightNeed = false;
@@ -3474,6 +3488,10 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
                                            0, &ctx, &mightNeed),fargt_sig[0],rt));
                 builder.CreateRetVoid();
             }
+
+            //cw->dump();
+            verifyFunction(*cw);
+            lam->cFunctionObject = (void*)cw;
         }
     }
     else {
