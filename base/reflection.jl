@@ -49,7 +49,7 @@ object_id(x::ANY) = ccall(:jl_object_id, Uint, (Any,), x)
 
 # type predicates
 const isimmutable = x->(isa(x,Tuple) || !typeof(x).mutable)
-isstructtype(t::DataType) = t.names!=() || (t.size==0 && !t.abstract)
+isstructtype(t::DataType) = (t.names!=() || t.size==0) && !t.abstract
 isstructtype(x) = false
 isbits(t::DataType) = !t.mutable & t.pointerfree & isleaftype(t)
 isbits(t::Type) = false
@@ -182,3 +182,8 @@ function function_module(f::Function, types=(Any...))
     end
     m[1].func.code.module
 end
+
+#
+
+type_alignment(x::DataType) = ccall(:jl_get_alignment,Csize_t,(Any,),x)
+field_offset(x::DataType,idx) = ccall(:jl_get_field_offset,Csize_t,(Any,Int32),x,idx)
