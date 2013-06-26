@@ -4614,8 +4614,6 @@ extern "C" void jl_init_codegen(void)
 #endif
 
 
-    JL_PUTS((char*)llvm::sys::getDefaultTargetTriple().c_str(),JL_STDOUT);
-
 #if !defined(LLVM_VERSION_MAJOR) || (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR == 0)
     jl_ExecutionEngine = EngineBuilder(m).setEngineKind(EngineKind::JIT).create();
 #ifdef JL_DEBUG_BUILD
