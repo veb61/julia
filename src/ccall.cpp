@@ -1378,8 +1378,10 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
             Value *mem = builder.CreateAlloca(lrt);
             builder.CreateStore(result, mem);
             result = mem;
-        }
         argvals[0] = result;
+        } else {
+            argvals[0] = builder.CreateBitCast(emit_nthptr_addr(result, (size_t)1), fargt_sig[0]);
+        }
     }
 
     // save argument depth until after we're done emitting arguments
@@ -1591,7 +1593,7 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
     if (!sret) {
         if (lrt == T_void)
             result = literal_pointer_val((jl_value_t*)jl_nothing);
-        if (lrt->isStructTy()) {
+        else if (lrt->isStructTy()) {
             //fprintf(stderr, "ccall rt: %s -> %s\n", f_name, ((jl_tag_type_t*)rt)->name->name->name);
             assert(jl_is_structtype(rt));
 

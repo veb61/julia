@@ -1643,94 +1643,91 @@ static void emit_setfield(jl_datatype_t *sty, Value *strct, size_t idx,
 
 static Value *emit_newsym(jl_value_t *ty, size_t nargs, jl_value_t **args, jl_codectx_t *ctx)
 {
-    if (jl_is_type_type(ty) && jl_is_datatype(jl_tparam0(ty)) &&
-        jl_is_leaf_type(jl_tparam0(ty))) {
-        ty = jl_tparam0(ty);
-        jl_datatype_t *sty = (jl_datatype_t*)ty;
-        size_t nf = jl_tuple_len(sty->names);
-        if (nf > 0) {
-            if (jl_isbits(sty)) {
-                Type *lt = julia_type_to_llvm(ty);
-                assert(lt != T_void);
-                Value *strct = UndefValue::get(lt);
-                size_t na = nargs-1 < nf ? nargs-1 : nf;
-                unsigned idx = 0;
-                for(size_t i=0; i < na; i++) {
-                    jl_value_t *jtype = jl_tupleref(sty->types,i);
-                    Type *fty = julia_type_to_llvm(jtype);
-                    if (fty == T_void || fty->isEmptyTy())
-                        continue;
-                    Value *fval = emit_unbox(fty, emit_unboxed(args[i+1],ctx), jtype);
-                    if (fty == T_int1)
-                        fval = builder.CreateZExt(fval, T_int8);
-                    strct = builder.
-                        CreateInsertValue(strct, fval, ArrayRef<unsigned>(&idx,1));
-                    idx++;
-                }
-                return mark_julia_type(strct,ty);
+    assert(jl_is_datatype(ty));
+    assert(jl_is_leaf_type(ty));
+    jl_datatype_t *sty = (jl_datatype_t*)ty;
+    size_t nf = jl_tuple_len(sty->names);
+    if (nf > 0) {
+        if (jl_isbits(sty)) {
+            Type *lt = julia_type_to_llvm(ty);
+            assert(lt != T_void);
+            Value *strct = UndefValue::get(lt);
+            size_t na = nargs-1 < nf ? nargs-1 : nf;
+            unsigned idx = 0;
+            for(size_t i=0; i < na; i++) {
+                jl_value_t *jtype = jl_tupleref(sty->types,i);
+                Type *fty = julia_type_to_llvm(jtype);
+                if (fty == T_void || fty->isEmptyTy())
+                    continue;
+                Value *fval = emit_unbox(fty, emit_unboxed(args[i+1],ctx), jtype);
+                if (fty == T_int1)
+                    fval = builder.CreateZExt(fval, T_int8);
+                strct = builder.
+                    CreateInsertValue(strct, fval, ArrayRef<unsigned>(&idx,1));
+                idx++;
             }
-            Value *f1 = NULL;
-            size_t j = 0;
-            int fieldStart = ctx->argDepth;
-            bool needroots = false;
-            for(size_t i=1; i < nargs; i++) {
-                needroots |= might_need_root(args[i]);
-            }
-            if (nf > 0 && sty->fields[0].isptr && nargs>1) {
-                // emit first field before allocating struct to save
-                // a couple store instructions. avoids initializing
-                // the first field to NULL, and sometimes the GC root
-                // for the new struct.
-                Value *fval = emit_expr(args[1],ctx);
-                f1 = boxed(fval,ctx);
-                j++;
-                if (might_need_root(args[1]) || fval->getType() != jl_pvalue_llvmt)
-                    make_gcroot(f1, ctx);
-            }
-            Value *strct =
-                builder.CreateCall(prepare_call(jlallocobj_func),
-                                   ConstantInt::get(T_size,
-                                                    sizeof(void*)+sty->size));
-            builder.CreateStore(literal_pointer_val((jl_value_t*)ty),
-                                emit_nthptr_addr(strct, (size_t)0));
-            if (f1) {
-                if (!jl_subtype(expr_type(args[1],ctx), jl_t0(sty->types), 0))
-                    emit_typecheck(f1, jl_t0(sty->types), "new", ctx);
-                emit_setfield(sty, strct, 0, f1, ctx, false);
-                ctx->argDepth = fieldStart;
-                if (nf > 1 && needroots)
-                    make_gcroot(strct, ctx);
-            }
-            else if (nf > 0 && needroots) {
-                make_gcroot(strct, ctx);
-            }
-            for(size_t i=j; i < nf; i++) {
-                if (sty->fields[i].isptr) {
-                    emit_setfield(sty, strct, i, V_null, ctx, false);
-                }
-            }
-            for(size_t i=j+1; i < nargs; i++) {
-                Value *rhs = emit_expr(args[i],ctx);
-                if (sty->fields[i-1].isptr && rhs->getType() != jl_pvalue_llvmt &&
-                    !needroots) {
-                    // if this struct element needs boxing and we haven't rooted
-                    // the struct, root it now.
-                    make_gcroot(strct, ctx);
-                    needroots = true;
-                }
-                if (rhs->getType() == jl_pvalue_llvmt) {
-                    if (!jl_subtype(expr_type(args[i],ctx), jl_tupleref(sty->types,i-1), 0))
-                        emit_typecheck(rhs, jl_tupleref(sty->types,i-1), "new", ctx);
-                }
-                emit_setfield(sty, strct, i-1, rhs, ctx, false);
-            }
+            return mark_julia_type(strct,ty);
+        }
+        Value *f1 = NULL;
+        size_t j = 0;
+        int fieldStart = ctx->argDepth;
+        bool needroots = false;
+        for(size_t i=1; i < nargs; i++) {
+            needroots |= might_need_root(args[i]);
+        }
+        if (nf > 0 && sty->fields[0].isptr && nargs>1) {
+            // emit first field before allocating struct to save
+            // a couple store instructions. avoids initializing
+            // the first field to NULL, and sometimes the GC root
+            // for the new struct.
+            Value *fval = emit_expr(args[1],ctx);
+            f1 = boxed(fval,ctx);
+            j++;
+            if (might_need_root(args[1]) || fval->getType() != jl_pvalue_llvmt)
+                make_gcroot(f1, ctx);
+        }
+        Value *strct =
+            builder.CreateCall(prepare_call(jlallocobj_func),
+                               ConstantInt::get(T_size,
+                                                sizeof(void*)+sty->size));
+        builder.CreateStore(literal_pointer_val((jl_value_t*)ty),
+                            emit_nthptr_addr(strct, (size_t)0));
+        if (f1) {
+            if (!jl_subtype(expr_type(args[1],ctx), jl_t0(sty->types), 0))
+                emit_typecheck(f1, jl_t0(sty->types), "new", ctx);
+            emit_setfield(sty, strct, 0, f1, ctx, false);
             ctx->argDepth = fieldStart;
-            return strct;
+            if (nf > 1 && needroots)
+                make_gcroot(strct, ctx);
         }
-        else {
-            // 0 fields, singleton
-            return literal_pointer_val(jl_new_struct_uninit((jl_datatype_t*)ty));
+        else if (nf > 0 && needroots) {
+            make_gcroot(strct, ctx);
         }
+        for(size_t i=j; i < nf; i++) {
+            if (sty->fields[i].isptr) {
+                emit_setfield(sty, strct, i, V_null, ctx, false);
+            }
+        }
+        for(size_t i=j+1; i < nargs; i++) {
+            Value *rhs = emit_expr(args[i],ctx);
+            if (sty->fields[i-1].isptr && rhs->getType() != jl_pvalue_llvmt &&
+                !needroots) {
+                // if this struct element needs boxing and we haven't rooted
+                // the struct, root it now.
+                make_gcroot(strct, ctx);
+                needroots = true;
+            }
+            if (rhs->getType() == jl_pvalue_llvmt) {
+                if (!jl_subtype(expr_type(args[i],ctx), jl_tupleref(sty->types,i-1), 0))
+                    emit_typecheck(rhs, jl_tupleref(sty->types,i-1), "new", ctx);
+            }
+            emit_setfield(sty, strct, i-1, rhs, ctx, false);
+        }
+        ctx->argDepth = fieldStart;
+        return strct;
     }
-    return NULL;
+    else {
+        // 0 fields, singleton
+        return literal_pointer_val(jl_new_struct_uninit((jl_datatype_t*)ty));
+    }
 }
