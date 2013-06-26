@@ -575,9 +575,9 @@ Value *llvm_type_rewrite(Value *v, Type *target_type, jl_value_t *ty, bool isret
 
     assert(!v->getType()->isPointerTy());
 
-    // LLVM doesn't allow us to cast values directly, so
+    // LLVM doesn't allow us to cast values directly, so 
     // we need to use this alloca trick
-    Value *mem = builder.CreateAlloca(target_type,ConstantInt::get(T_size,1));
+    Value *mem = builder.CreateAlloca(target_type);
     builder.CreateStore(v,builder.CreateBitCast(mem,v->getType()->getPointerTo()));
     return builder.CreateLoad(mem);
 }
@@ -738,7 +738,7 @@ static Value *julia_to_native(Type *ty, jl_value_t *jt, Value *jv,
                     return builder.CreateBitCast(jv, ty);
                 }
                 else {
-                    Value *mem = builder.CreateAlloca(ty,ConstantInt::get(T_size,1));
+                    Value *mem = builder.CreateAlloca(ty);
                     builder.CreateStore(jv,builder.CreateBitCast(mem,vt->getPointerTo()));
                     return mem;
                 }
@@ -750,7 +750,7 @@ static Value *julia_to_native(Type *ty, jl_value_t *jt, Value *jv,
                 return jv;
             }
             else {
-                Value *mem = builder.CreateAlloca(vt,ConstantInt::get(T_size,1));
+                Value *mem = builder.CreateAlloca(vt);
                 builder.CreateStore(jv,mem);
                 return mem;
             }
@@ -805,7 +805,7 @@ static Value *julia_to_native(Type *ty, jl_value_t *jt, Value *jv,
             if(!needCopy)
                 return pjv;
             else {
-                Value *mem = builder.CreateAlloca(ty,ConstantInt::get(T_size, 0));
+                Value *mem = builder.CreateAlloca(ty);
                 builder.CreateMemCpy(mem,pjv,(uint64_t)jl_datatype_size(jt),(uint64_t)((jl_datatype_t*)jt)->alignment);
                 return mem;
             }
@@ -829,7 +829,7 @@ static Value *julia_to_native(Type *ty, jl_value_t *jt, Value *jv,
         if(!needCopy)
             return pjv;
         else {
-            Value *mem = builder.CreateAlloca(ty,ConstantInt::get(T_size, 0));
+            Value *mem = builder.CreateAlloca(ty);
             builder.CreateMemCpy(mem,pjv,(uint64_t)jl_datatype_size(jt),(uint64_t)((jl_datatype_t*)jt)->alignment);
             return mem;
         }
@@ -1372,18 +1372,14 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
     // First, if the ABI requires us to provide the space for the return
     // argument, allocate the box and store that as the first argument type
     if (sret) {
-        assert(jl_is_structtype(rt));
-        result = builder.CreateCall(
-                prepare_call(jlallocobj_func),
-                ConstantInt::get(T_size,
-                    sizeof(void*)+((jl_datatype_t*)rt)->size));
-        //TODO: Fill type pointer fields with C_NULL's
-        builder.CreateStore(
-                literal_pointer_val((jl_value_t*)rt),
-                emit_nthptr_addr(result, (size_t)0));
-        argvals[0] = builder.CreateBitCast(
-                emit_nthptr_addr(result, (size_t)1),
-                fargt[0]);
+        result = emit_newsym(rt,0,NULL,ctx);
+        assert(result != NULL && "Type was not concrete");
+        if (!result->getType()->isPointerTy()) {
+            Value *mem = builder.CreateAlloca(lrt);
+            builder.CreateStore(result, mem);
+            result = mem;
+        }
+        argvals[0] = result;
     }
 
     // save argument depth until after we're done emitting arguments
@@ -1460,6 +1456,7 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
             argvals[ai+sret] = llvm_type_rewrite(julia_to_native(largty, jargty, arg, expr_type(argi, ctx), addressOf, byRefList[ai], inRegList[ai],
                                                need_private_copy(jargty,byRefList[ai]),ai+1, ctx, &mightNeed, &nSR),fargt_sig[ai+sret],jargty,false));
         } else {
+            assert(0);
             assert(jl_is_structtype(jargty));
             assert(largty->isStructTy());
             StructType *sty = dyn_cast<StructType>(largty);
@@ -1537,6 +1534,7 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
             instList.push_front((Instruction*)saveloc);
         savespot = (Instruction*)saveloc;
     }
+
     if (needStackRestore) {
         stacksave = CallInst::Create(Intrinsic::getDeclaration(jl_Module,
                                                                Intrinsic::stacksave));
@@ -1592,7 +1590,7 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
     // then we do not need to do this.
     if (!sret) {
         if (lrt == T_void)
-            return literal_pointer_val((jl_value_t*)jl_nothing);
+            result = literal_pointer_val((jl_value_t*)jl_nothing);
         if (lrt->isStructTy()) {
             //fprintf(stderr, "ccall rt: %s -> %s\n", f_name, ((jl_tag_type_t*)rt)->name->name->name);
             assert(jl_is_structtype(rt));
@@ -1611,7 +1609,11 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
                                     PointerType::get(prt,0)));
             return mark_julia_type(strct, rt);
         } else {
-            result = builder.CreateBitCast(result,lrt);
+            if(prt->getPrimitiveSizeInBits() == lrt->getPrimitiveSizeInBits())
+                result = builder.CreateBitCast(result,lrt);
+            else {
+                assert(0 && "Unimplemented");
+            }
         }
     }
     return mark_julia_type(result, rt);
