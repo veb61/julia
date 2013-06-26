@@ -26,7 +26,7 @@ clean:
 .PHONY: $(TESTS) perf clean
 
 libccalltest.$(SHLIB_EXT): ccalltest.c
-	$(CC) $(CFLAGS) $(DEBUGFLAGS) -O3 $< -fPIC -shared -o $@ $(LDFLAGS) -DCC=$(CC)
+	$(CC) $(CFLAGS) $(DEBUGFLAGS) -O3 $< -fno-stack-protector -fPIC -shared -o $@ $(LDFLAGS) -DCC=$(CC)
 
 ccalltest: ccalltest.c
 	$(CC) $(CFLAGS) $(DEBUGFLAGS) -O3 $< -o $@ $(LDFLAGS) -DCC=$(CC)
