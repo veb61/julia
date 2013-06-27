@@ -1558,6 +1558,11 @@ static Value *boxed(Value *v, jl_codectx_t *ctx, jl_value_t *jt)
     }
 
     jl_datatype_t *jb = (jl_datatype_t*)jt;
+    if (!jl_ismutable(jt) && !jl_is_cpointer_type(jt) && t->isPointerTy())
+    {
+        v = builder.CreateLoad(v);
+        t = v->getType();
+    }
     assert(jl_is_datatype(jb));
     if (jb == jl_int8_type)
         return builder.CreateCall(prepare_call(box_int8_func),
@@ -1645,6 +1650,7 @@ static Value *emit_newsym(jl_value_t *ty, size_t nargs, jl_value_t **args, jl_co
 {
     assert(jl_is_datatype(ty));
     assert(jl_is_leaf_type(ty));
+    assert(nargs>0);
     jl_datatype_t *sty = (jl_datatype_t*)ty;
     size_t nf = jl_tuple_len(sty->names);
     if (nf > 0) {
