@@ -446,7 +446,7 @@ void needPassByRef(AbiState *state,jl_value_t *ty, bool *byRef, bool *inReg, boo
         return;
     }
     size_t size = jl_datatype_size(ty);
-    *byRef = !(size == 1 || size == 2 || size == 4 || size == 8); // but not sse types        
+    *byRef = !(size == 1 || size == 2 || size == 4 || size == 8); // but not sse types
     *byRefAttr = *byRef;
     if(state->int_regs > 0) {
         state->int_regs--; //Windows passes these by pointer
@@ -575,7 +575,7 @@ Value *llvm_type_rewrite(Value *v, Type *target_type, jl_value_t *ty, bool isret
 
     assert(!v->getType()->isPointerTy());
 
-    // LLVM doesn't allow us to cast values directly, so 
+    // LLVM doesn't allow us to cast values directly, so
     // we need to use this alloca trick
     Value *mem = builder.CreateAlloca(target_type);
     builder.CreateStore(v,builder.CreateBitCast(mem,v->getType()->getPointerTo()));
@@ -1561,6 +1561,8 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
     ((CallInst*)ret)->setAttributes(attributes);
 #endif
 
+    ((CallInst*)ret)->setAttributes(attrs);
+
     if (cc != CallingConv::C)
         ((CallInst*)ret)->setCallingConv(cc);
     if (!sret)
@@ -1597,20 +1599,15 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
             //fprintf(stderr, "ccall rt: %s -> %s\n", f_name, ((jl_tag_type_t*)rt)->name->name->name);
             assert(jl_is_structtype(rt));
 
-            // Call jlallocobj_func with the appropriate size (argument size size_t)
-            Value *strct =
-            builder.CreateCall(prepare_call(jlallocobj_func),
-                                   ConstantInt::get(T_size,
-                                        sizeof(void*)+((jl_datatype_t*)rt)->size));
-            // Store the type into the first field
-            builder.CreateStore(literal_pointer_val((jl_value_t*)rt),
-                                emit_nthptr_addr(strct, (size_t)0));
-            builder.CreateStore(result,
-                                builder.CreateBitCast(
-                                    emit_nthptr_addr(strct, (size_t)1),
-                                    PointerType::get(prt,0)));
-            result->dump();
-            return mark_julia_type(strct, rt);
+            Value *newsym = emit_newsym(rt,1,NULL,ctx);
+            assert(result != NULL && "Type was not concrete");
+            if (newsym->getType()->isPointerTy()) {
+                builder.CreateStore(result,builder.CreateBitCast(emit_nthptr_addr(newsym, (size_t)1), prt));
+                result = newsym;
+            }
+            // otherwise it's fine to pass this by value. Techincally we could do alloca/store/load,
+            // but why should we?
+
         } else {
             if(prt->getPrimitiveSizeInBits() == lrt->getPrimitiveSizeInBits()) {
                 result = builder.CreateBitCast(result,lrt);
