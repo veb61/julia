@@ -1456,7 +1456,9 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
         bool mightNeed=false;
         if (!need_destructure_argument(jargty)) {
             argvals[ai+sret] = llvm_type_rewrite(julia_to_native(largty, jargty, arg, expr_type(argi, ctx), addressOf, byRefList[ai], inRegList[ai],
-                                               need_private_copy(jargty,byRefList[ai]),ai+1, ctx, &mightNeed, &nSR),fargt_sig[ai+sret],jargty,false));
+                                               need_private_copy(jargty,byRefList[ai]),ai+1, ctx, &mightNeed, &nSR),
+                                                fargt_sig.size()>ai+sret?fargt_sig[ai+sret]:preferred_llvm_type(jargty,false),
+                                                jargty,false);
         } else {
             assert(0);
             assert(jl_is_structtype(jargty));
