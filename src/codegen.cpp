@@ -553,6 +553,7 @@ static Function *to_function(jl_lambda_info_t *li, bool force_specialized, bool 
         li->functionObject = NULL;
         li->cFunctionObject = NULL;
         li->specFunctionObject = NULL;
+        li->cFunctionObject = NULL;
         nested_compile = last_n_c;
         if (old != NULL) {
             builder.SetInsertPoint(old);
