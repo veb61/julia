@@ -182,8 +182,8 @@ static Value *runtime_sym_lookup(PointerType *funcptype, char *f_lib, char *f_na
 #endif
     }
 
-    BasicBlock *dlsym_lookup = BasicBlock::Create(getGlobalContext(), "dlsym"),
-               *ccall_bb = BasicBlock::Create(getGlobalContext(), "ccall");
+    BasicBlock *dlsym_lookup = BasicBlock::Create(jl_LLVMContext, "dlsym"),
+               *ccall_bb = BasicBlock::Create(jl_LLVMContext, "ccall");
     builder.CreateCondBr(builder.CreateICmpNE(builder.CreateLoad(llvmgv), initnul), ccall_bb, dlsym_lookup);
 
     ctx->f->getBasicBlockList().push_back(dlsym_lookup);
@@ -397,7 +397,7 @@ Type *preferred_llvm_type(jl_value_t *ty, bool isret)
 
     // Make into an aggregate of
     if(c == Sse)
-        target_type = Type::getDoubleTy(getGlobalContext());
+        target_type = Type::getDoubleTy(jl_LLVMContext);
     else if(c == Integer)
         target_type = T_int64;
     else
@@ -1048,7 +1048,11 @@ std::string generate_func_sig(Type **lrt, Type **prt, int &sret,
     AbiState abi = default_abi_state;
     sret = 0;
     if (jl_is_datatype(rt) && !jl_is_abstracttype(rt) && use_sret(&abi,rt)) {
-#if LLVM32 || LLVM33
+#if LLVM33
+        paramattrs.push_back(AttrBuilder());
+        paramattrs[0].clear();
+        paramattrs[0].addAttribute(Attribute::StructRet);
+#elif LLVM32
         paramattrs.push_back(AttrBuilder());
         paramattrs[0].clear();
         paramattrs[0].addAttribute(Attributes::StructRet);
@@ -1113,7 +1117,7 @@ std::string generate_func_sig(Type **lrt, Type **prt, int &sret,
             msg << "ccall: the type of argument ";
             msg << i+1;
             msg << " doesn't correspond to a C type";
-            return msg;
+            return msg.str();
         }
 
         // Whether the ABI needs us to pass this by ref and/or in registers
@@ -1133,7 +1137,12 @@ std::string generate_func_sig(Type **lrt, Type **prt, int &sret,
         // Note that even though the LLVM argument is called ByVal
         // this really means that the thing we're passing is pointing to
         // the thing we want to pass by value
-#if LLVM33 || LLVM32
+#if LLVM33
+        if(byRefAttr)
+            paramattrs[i+sret].addAttribute(Attribute::ByVal);
+        if(inReg)
+            paramattrs[i+sret].addAttribute(Attribute::InReg);
+#elif LLVM32
         if(byRefAttr)
             paramattrs[i+sret].addAttribute(Attributes::ByVal);
         if(inReg)
@@ -1174,17 +1183,18 @@ std::string generate_func_sig(Type **lrt, Type **prt, int &sret,
 
 #ifdef LLVM33
     if(retattrs.hasAttributes())
-        attributes = Attributes::get(AttributeSet::ReturnIndex,retattrs);
+        attributes = AttributeSet::get(jl_LLVMContext,AttributeSet::ReturnIndex,retattrs);
     for(i = 0; i < nargt+sret; ++i)
         if(paramattrs[i].hasAttributes())
-            attributes = attributes.addAttributes(i+1,paramattrs[i]);
+            attributes = attributes.addAttributes(jl_LLVMContext,i+1,
+                    AttributeSet::get(jl_LLVMContext,i+1,paramattrs[i]));
 #elif LLVM32
     if(retattrs.hasAttributes())
         attrs.push_back(AttributeWithIndex::get(0, Attributes::get(jl_LLVMContext,retattrs)));
     for(i = 0; i < nargt+sret; ++i)
         if(paramattrs[i].hasAttributes())
             attrs.push_back(AttributeWithIndex::get(i+1, Attributes::get(jl_LLVMContext,paramattrs[i])));
-    attributes = AttrListPtr::get(getGlobalContext(), ArrayRef<AttributeWithIndex>(attrs));
+    attributes = AttrListPtr::get(jl_LLVMContext, ArrayRef<AttributeWithIndex>(attrs));
 #else
     attributes = AttrListPtr::get(attrs.data(),attrs.size());
 #endif
@@ -1454,6 +1464,7 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
 #endif
 
         bool mightNeed=false;
+        bool nSR=false;
         if (!need_destructure_argument(jargty)) {
             argvals[ai+sret] = llvm_type_rewrite(julia_to_native(largty, jargty, arg, expr_type(argi, ctx), addressOf, byRefList[ai], inRegList[ai],
                                                need_private_copy(jargty,byRefList[ai]),ai+1, ctx, &mightNeed, &nSR),
@@ -1464,7 +1475,7 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
             assert(jl_is_structtype(jargty));
             assert(largty->isStructTy());
             StructType *sty = dyn_cast<StructType>(largty);
-            Value *s = julia_to_native(largty, jargty, arg, expr_type(argi, ctx), addressOf, true, false, need_private_copy(jargty,byRefList[ai]), ai+1, ctx, &mightNeed);
+            Value *s = julia_to_native(largty, jargty, arg, expr_type(argi, ctx), addressOf, true, false, need_private_copy(jargty,byRefList[ai]), ai+1, ctx, &mightNeed, &nSR);
             for (size_t j = 0; j < sty->getNumElements(); ++j)
             {
                 std::vector<Value*> args;
@@ -1556,8 +1567,10 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
     Value *ret = builder.CreateCall(
             prepare_call(llvmf),
             ArrayRef<Value*>(&argvals[0],(nargs-3)/2+sret));
-#ifdef LLVM32
-    ((CallInst*)ret)->setAttributes(AttrListPtr::get(getGlobalContext(), ArrayRef<AttributeWithIndex>(attrs)));
+#if LLVM33
+    ((CallInst*)ret)->setAttributes(attrs);
+#elif LLVM32
+    ((CallInst*)ret)->setAttributes(AttrListPtr::get(jl_LLVMContext, ArrayRef<AttributeWithIndex>(attrs)));
 #else
     attributes = AttrListPtr::get(attrs.data(),attrs.size());
     ((CallInst*)ret)->setAttributes(attributes);

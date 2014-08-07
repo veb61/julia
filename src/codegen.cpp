@@ -3389,17 +3389,19 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
             Value *r = builder.CreateCall(f, ArrayRef<Value*>(args));
             
             bool mightNeed = false;
+            bool nSR = false;
             if(!sret) {
-                builder.CreateRet(llvm_type_rewrite(julia_to_native(lrt, rt, r, jl_ast_rettype(lam, lam->ast), 0, false, false, false,
-                                           0, &ctx, &mightNeed),prt,rt,true));
+                builder.CreateRet(llvm_type_rewrite(julia_to_native(lrt, rt, r, rt, 0, false, false, false,
+                                           0, &ctx, &mightNeed, &nSR),prt,rt,true));
             } else {
                 //sretPtr->dump();
-                Value *sretVal = llvm_type_rewrite(julia_to_native(lrt, rt, r, jl_ast_rettype(lam, lam->ast), 0, false, false, false,
-                                           0, &ctx, &mightNeed),fargt_sig[0],rt,true);
+                Value *sretVal = llvm_type_rewrite(julia_to_native(lrt, rt, r, rt, 0, false, false, false,
+                                           0, &ctx, &mightNeed, &nSR),fargt_sig[0],rt,true);
                 //sretVal->dump();
                 builder.CreateStore(sretVal,sretPtr);
                 builder.CreateRetVoid();
             }
+            assert(!nSR);
 
             //cw->dump();
             verifyFunction(*cw);
@@ -3414,7 +3416,7 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
             lam->functionID = jl_assign_functionID(f);
         }
     }
-    if (jlrettype == (jl_value_t*)jl_bottom_type)
+    if (rt == (jl_value_t*)jl_bottom_type)
         f->setDoesNotReturn();
 #if defined(_OS_WINDOWS_) && !defined(_CPU_X86_64_)
     // tell Win32 to realign the stack to the next 8-byte boundary
@@ -3850,7 +3852,7 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
             }
             else if (retty != T_void) {
                 retval = emit_unbox(retty, 
-                                    emit_unboxed(jl_exprarg(ex,0), &ctx), jlrettype);
+                                    emit_unboxed(jl_exprarg(ex,0), &ctx), rt);
             }
             else {
                 retval = emit_expr(jl_exprarg(ex,0), &ctx, false);
