@@ -1,3 +1,19 @@
+//===-- abi_llvm.cpp - LLVM Target ABI description --------------*- C++ -*-===//
+//
+//                         LDC – the LLVM D compiler
+//
+// This file is distributed under the BSD-style LDC license. See the LICENSE
+// file for details.
+//
+//===----------------------------------------------------------------------===//
+//
+// This ABI implementation does whatever LLVM decides is fine.
+// It can be useful when first porting Julia to a new platform
+// (until a platform-specific implementation can be developed).
+//
+//===----------------------------------------------------------------------===//
+
+
 typedef bool AbiState;
 AbiState default_abi_state = 0;
 

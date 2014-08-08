@@ -49,6 +49,7 @@ External libraries, if used, include their own licenses:
 - [RMATH](http://www.r-project.org/Licenses/)
 - [SUITESPARSE](http://www.cise.ufl.edu/research/sparse/SuiteSparse/current/SuiteSparse/)
 - [ZLIB](http://zlib.net/zlib_license.html)
+- [LDC](https://github.com/ldc-developers/ldc/blob/master/LICENSE)
 
 Julia bundles the following as external executables on some platforms:
 
