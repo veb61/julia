@@ -568,13 +568,11 @@ static Function *to_function(jl_lambda_info_t *li, bool force_specialized, bool 
 #ifdef LLVM35
     llvm::raw_fd_ostream out(1,false);
 #endif
-    if (
 #ifdef LLVM35
-        verifyFunction(*f,&out)
+    if (verifyFunction(*f,&out)) {
 #else
-        verifyFunction(*f,PrintMessageAction)
+    if (verifyFunction(*f,PrintMessageAction)) {
 #endif
-        ) {
         f->dump();
         abort();
     }
@@ -3352,8 +3350,6 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
                 }
                 // and perhaps box it if necessary
                 Type *t = julia_type_to_llvm(jty);
-                //t->dump();
-                //fargt[i+sret]->dump();
                 if(byRefList[i]) {
                     val = builder.CreateLoad(val,false);
                 }
@@ -3371,7 +3367,7 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
                                 literal_pointer_val((jl_value_t*)jty),
                                 emit_nthptr_addr(mem, (size_t)0));
                         builder.CreateStore(val,builder.CreateBitCast(
-                            emit_nthptr_addr(mem, (size_t)1),v->getType()->getPointerTo()));
+                            emit_nthptr_addr(mem, (size_t)1),val->getType()->getPointerTo()));
 
                         val = builder.CreateBitCast(mem,jl_pvalue_llvmt);
                     } else {
@@ -3382,29 +3378,43 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
                 args.push_back(val); 
             }
 
-            //f->dump();
-            //cw->dump();
-            //for (std::vector<Value *>::iterator it = args.begin() ; it != args.end(); ++it)
-            //    (*it)->dump();
             Value *r = builder.CreateCall(f, ArrayRef<Value*>(args));
             
             bool mightNeed = false;
             bool nSR = false;
-            if(!sret) {
-                builder.CreateRet(llvm_type_rewrite(julia_to_native(lrt, rt, r, rt, 0, false, false, false,
-                                           0, &ctx, &mightNeed, &nSR),prt,rt,true));
-            } else {
-                //sretPtr->dump();
+            if (lrt == T_void) {
+                // isGhost
+                builder.CreateRetVoid();
+            }
+            else if (!sret) {
+                if (rt != (jl_value_t*)jl_bottom_type) {
+                    builder.CreateRet(llvm_type_rewrite(julia_to_native(lrt, rt, r, rt, 0, false, false, false,
+                                               0, &ctx, &mightNeed, &nSR),prt,rt,true));
+                } else {
+                    builder.CreateRetVoid();
+                }
+            }
+            else {
                 Value *sretVal = llvm_type_rewrite(julia_to_native(lrt, rt, r, rt, 0, false, false, false,
                                            0, &ctx, &mightNeed, &nSR),fargt_sig[0],rt,true);
-                //sretVal->dump();
                 builder.CreateStore(sretVal,sretPtr);
                 builder.CreateRetVoid();
             }
             assert(!nSR);
 
-            //cw->dump();
-            verifyFunction(*cw);
+#ifdef JL_DEBUG_BUILD
+#ifdef LLVM35
+            llvm::raw_fd_ostream out(1,false);
+#endif
+#ifdef LLVM35
+            if (verifyFunction(*cw,&out)) {
+#else
+            if (verifyFunction(*cw,PrintMessageAction)) {
+#endif
+                cw->dump();
+                abort();
+            }
+#endif
             lam->cFunctionObject = (void*)cw;
         }
     }
@@ -3427,7 +3437,7 @@ static Function *emit_function(jl_lambda_info_t *lam, bool force_specialized, bo
     attr->addStackAlignmentAttr(8);
 #if LLVM32 && !LLVM33
     f->addAttribute(Attributes::FunctionIndex,
-        Attributes::get(f->getContext(),*attr));
+            Attributes::get(f->getContext(),*attr));
 #else
     f->addAttributes(AttributeSet::FunctionIndex,
         AttributeSet::get(f->getContext(),

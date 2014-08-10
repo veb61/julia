@@ -683,10 +683,7 @@ std::string generate_func_sig(Type **lrt, Type **prt, int &sret,
 {
     size_t nargt = jl_tuple_len(tt);
     *lrt = julia_struct_to_llvm(rt);
-    assert(lrt); // verified in sanity_check()
-    *prt = preferred_llvm_type(rt,true);
-    if(*prt == NULL)
-        *prt = *lrt;
+    assert(*lrt); // verified in sanity_check()
 
 #if LLVM33
     AttrBuilder retattrs;
@@ -698,21 +695,31 @@ std::string generate_func_sig(Type **lrt, Type **prt, int &sret,
 #endif
     AbiState abi = default_abi_state;
     sret = 0;
-    if (jl_is_datatype(rt) && !jl_is_abstracttype(rt) && use_sret(&abi,rt)) {
+
+    if (*lrt == T_void || (*lrt)->isEmptyTy()) {
+        // isGhost
+        *prt = *lrt = T_void;
+    } else {
+        *prt = preferred_llvm_type(rt,true);
+        if(*prt == NULL)
+            *prt = *lrt;
+
+        if (jl_is_datatype(rt) && !jl_is_abstracttype(rt) && use_sret(&abi,rt)) {
 #if LLVM33
-        paramattrs.push_back(AttrBuilder());
-        paramattrs[0].clear();
-        paramattrs[0].addAttribute(Attribute::StructRet);
+            paramattrs.push_back(AttrBuilder());
+            paramattrs[0].clear();
+            paramattrs[0].addAttribute(Attribute::StructRet);
 #elif LLVM32
-        paramattrs.push_back(AttrBuilder());
-        paramattrs[0].clear();
-        paramattrs[0].addAttribute(Attributes::StructRet);
+            paramattrs.push_back(AttrBuilder());
+            paramattrs[0].clear();
+            paramattrs[0].addAttribute(Attributes::StructRet);
 #else
-        attrs.push_back(AttributeWithIndex::get(1, Attribute::StructRet));
+            attrs.push_back(AttributeWithIndex::get(1, Attribute::StructRet));
 #endif
-        fargt.push_back(PointerType::get(*prt,0));
-        fargt_sig.push_back(PointerType::get(*prt,0));
-        sret = 1;
+            fargt.push_back(PointerType::get(*prt,0));
+            fargt_sig.push_back(PointerType::get(*prt,0));
+            sret = 1;
+        }
     }
 
     size_t i;
@@ -1039,7 +1046,7 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
             Value *mem = builder.CreateAlloca(lrt);
             builder.CreateStore(result, mem);
             result = mem;
-        argvals[0] = result;
+            argvals[0] = result;
         } else {
             argvals[0] = builder.CreateBitCast(emit_nthptr_addr(result, (size_t)1), fargt_sig[0]);
         }
@@ -1273,7 +1280,7 @@ static Value *emit_ccall(jl_value_t **args, size_t nargs, jl_codectx_t *ctx)
             } else if(lrt != prt) {
                 result = llvm_type_rewrite(result,lrt,rt,true);
             }
-            // otherwise it's fine to pass this by value. Techincally we could do alloca/store/load,
+            // otherwise it's fine to pass this by value. Technically we could do alloca/store/load,
             // but why should we?
 
         } else {
