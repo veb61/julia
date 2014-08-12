@@ -256,7 +256,11 @@ namespace llvm {
 static DICompositeType jl_value_dillvmt;
 static DIDerivedType jl_pvalue_dillvmt;
 static DIDerivedType jl_ppvalue_dillvmt;
-static DICompositeType jl_di_func_sig;
+#ifdef LLVM36
+DISubroutineType jl_di_func_sig;
+#else
+DICompositeType jl_di_func_sig;
+#endif
 
 // constants
 static Value *V_null;
@@ -493,15 +497,16 @@ typedef struct {
     BasicBlock::iterator first_gcframe_inst;
     BasicBlock::iterator last_gcframe_inst;
     llvm::DIBuilder *dbuilder;
+    bool debug_enabled;
     std::vector<Instruction*> gc_frame_pops;
     std::vector<CallInst*> to_inline;
 } jl_codectx_t;
 
 static Value *emit_expr(jl_value_t *expr, jl_codectx_t *ctx, bool boxed=true,
-                        bool valuepos=true);
+                        bool valuepos=true, jl_sym_t **valuevar=NULL);
 static Value *emit_unboxed(jl_value_t *e, jl_codectx_t *ctx);
 static int is_global(jl_sym_t *s, jl_codectx_t *ctx);
-static Value *make_gcroot(Value *v, jl_codectx_t *ctx);
+static Value *make_gcroot(Value *v, jl_codectx_t *ctx, jl_sym_t *var = NULL);
 static Value *global_binding_pointer(jl_module_t *m, jl_sym_t *s,
                                      jl_binding_t **pbnd, bool assign);
 static Value *emit_checked_var(Value *bp, jl_sym_t *name, jl_codectx_t *ctx);
@@ -1188,13 +1193,22 @@ static void simple_escape_analysis(jl_value_t *expr, bool esc, jl_codectx_t *ctx
 
 // --- gc root utils ---
 
-static Value *make_gcroot(Value *v, jl_codectx_t *ctx)
+static Value *make_gcroot(Value *v, jl_codectx_t *ctx, jl_sym_t *var)
 {
     Value *froot = builder.CreateGEP(ctx->argTemp,
                                      ConstantInt::get(T_size,
                                                       ctx->argSpaceOffs +
                                                       ctx->argDepth));
     builder.CreateStore(v, froot);
+    if (var != NULL)
+    {
+        std::map<jl_sym_t *, jl_varinfo_t>::iterator it = ctx->vars.find(var);
+        if (it != ctx->vars.end() && ((llvm::MDNode*)it->second.dinfo) != NULL)
+        {
+            if (ctx->debug_enabled)
+                ctx->dbuilder->insertDeclare(froot, it->second.dinfo, builder.GetInsertBlock());
+        }
+    }
     ctx->argDepth++;
     if (ctx->argDepth > ctx->maxDepth)
         ctx->maxDepth = ctx->argDepth;
@@ -2177,9 +2191,10 @@ static Value *emit_jlcall(Value *theFptr, Value *theF, jl_value_t **args,
     // emit arguments
     int argStart = ctx->argDepth;
     for(size_t i=0; i < nargs; i++) {
-        Value *anArg = emit_expr(args[i], ctx);
+        jl_sym_t *sym = NULL;
+        Value *anArg = emit_expr(args[i], ctx, true, true, &sym);
         // put into argument space
-        make_gcroot(boxed(anArg, ctx, expr_type(args[i],ctx)), ctx);
+        make_gcroot(boxed(anArg, ctx, expr_type(args[i],ctx)), ctx, sym);
     }
 
     // call
@@ -2474,7 +2489,8 @@ static void emit_assignment(jl_value_t *l, jl_value_t *r, jl_codectx_t *ctx)
                             rval);
 
         if (!is_global(s,ctx) && ((llvm::MDNode*)ctx->vars[s].dinfo) != NULL) {  //TODO: Fixme
-            ctx->dbuilder->insertDbgValueIntrinsic(rval,0,ctx->vars[s].dinfo,builder.GetInsertBlock());
+            if(ctx->debug_enabled)
+                ctx->dbuilder->insertDbgValueIntrinsic(rval,0,ctx->vars[s].dinfo,builder.GetInsertBlock());
         }
     }
     else {
@@ -2546,15 +2562,21 @@ static Value *emit_condition(jl_value_t *cond, const std::string &msg, jl_codect
 }
 
 static Value *emit_expr(jl_value_t *expr, jl_codectx_t *ctx, bool isboxed,
-                        bool valuepos)
+                        bool valuepos, jl_sym_t **valuevar)
 {
     if (jl_is_symbol(expr)) {
         if (!valuepos) return NULL;
-        return emit_var((jl_sym_t*)expr, (jl_value_t*)jl_undef_type, ctx, isboxed);
+        jl_sym_t *sym = (jl_sym_t*)expr;
+        if (valuevar != NULL)
+            *valuevar = sym;
+        return emit_var(sym, (jl_value_t*)jl_undef_type, ctx, isboxed);    
     }
     if (jl_is_symbolnode(expr)) {
         if (!valuepos) return NULL;
-        return emit_var(jl_symbolnode_sym(expr), jl_symbolnode_type(expr), ctx, isboxed);
+        jl_sym_t *sym = jl_symbolnode_sym(expr);
+        if (valuevar != NULL)
+            *valuevar = sym;
+        return emit_var(sym, jl_symbolnode_type(expr), ctx, isboxed);
     }
     else if (jl_is_labelnode(expr)) {
         int labelname = jl_labelnode_label(expr);
@@ -2731,7 +2753,7 @@ static Value *emit_expr(jl_value_t *expr, jl_codectx_t *ctx, bool isboxed,
         make_gcroot(a1, ctx);
         Value *a2 = boxed(emit_expr(args[2], ctx),ctx);
         make_gcroot(a2, ctx);
-        Value *mdargs[5] = { name, bp, literal_pointer_val(bnd), a1, a2 };
+        Value *mdargs[6] = { name, bp, literal_pointer_val(bnd), a1, a2 };
         ctx->argDepth = last_depth;
         return builder.CreateCall(prepare_call(jlmethod_func), ArrayRef<Value*>(&mdargs[0], 5));
     }
@@ -3000,7 +3022,8 @@ static Value *alloc_local(jl_sym_t *s, jl_codectx_t *ctx)
         vi.isGhost = true;
     }
     vi.memvalue = lv;
-    ctx->dbuilder->insertDeclare(lv,vi.dinfo,builder.GetInsertBlock());
+    if (ctx->debug_enabled)
+        ctx->dbuilder->insertDeclare(lv,vi.dinfo,builder.GetInsertBlock());
     return lv;
 }
 
@@ -3474,20 +3497,15 @@ static Function *emit_function(jl_lambda_info_t *lam, bool cstyle)
     BasicBlock *b0 = BasicBlock::Create(jl_LLVMContext, "top", f);
     builder.SetInsertPoint(b0);
 
-#ifdef LLVM36
-    llvm::DITypeArray EltTypeArray = dbuilder.getOrCreateTypeArray(None);
-#else
-    llvm::DIArray EltTypeArray = dbuilder.getOrCreateArray(ArrayRef<Value*>());
-#endif
     //ios_printf(ios_stderr, "\n*** compiling %s at %s:%d\n\n",
     //           lam->name->name, filename.c_str(), lno);
 
     DebugLoc noDbg;
-    bool debug_enabled = true;
+    ctx.debug_enabled = true;
     if (dbgFuncName[0] == 0) {
         // special value: if function name is empty, disable debug info
         builder.SetCurrentDebugLocation(noDbg);
-        debug_enabled = false;
+        ctx.debug_enabled = false;
         do_coverage = false;
         do_malloc_log = false;
     }
@@ -3510,14 +3528,22 @@ static Function *emit_function(jl_lambda_info_t *lam, bool cstyle)
         if (!specsig) {
             subrty = jl_di_func_sig;
         } else {
+#ifdef LLVM36
+            llvm::DITypeArray EltTypeArray;
+#else
             llvm::DIArray EltTypeArray;
+#endif
             std::vector<Value*> ditypes(0);
             for(size_t i=0; i < jl_tuple_len(lam->specTypes); i++) {
                 if(ctx.vars[jl_decl_var(jl_cellref(largs,i))].isGhost)
                     continue;
                ditypes.push_back(julia_type_to_di(jl_tupleref(lam->specTypes,i),ctx.dbuilder,false));
             }
+#ifdef LLVM36
+            subrty = ctx.dbuilder->createSubroutineType(fil,ctx.dbuilder->getOrCreateTypeArray(ditypes));
+#else
             subrty = ctx.dbuilder->createSubroutineType(fil,ctx.dbuilder->getOrCreateArray(ditypes));
+#endif
         }
 
         fil = dbuilder.createFile(filename, ".");
@@ -3542,47 +3568,49 @@ static Function *emit_function(jl_lambda_info_t *lam, bool cstyle)
         assert(SP.Verify() && SP.describes(f) && SP.getFunction() == f);
     }
 
-    // Go over all arguments and local variables and initialize their debug information
-    for(i=0; i < nreq; i++) {
-        jl_sym_t *argname = jl_decl_var(jl_cellref(largs,i));
-        jl_varinfo_t &varinfo = ctx.vars[argname];
-        varinfo.dinfo = ctx.dbuilder->createLocalVariable(
-            llvm::dwarf::DW_TAG_arg_variable,    // Tag
-            SP,         // Scope (current function will be fill in later)
-            argname->name,    // Variable name
-            fil,                    // File
-            ctx.lineno,             // Line (for now, use lineno of the function)
-            julia_type_to_di(varinfo.declType,ctx.dbuilder,specsig), // Variable type
-            false,                  // May be optimized out
-            0,                      // Flags (TODO: Do we need any)
-            i+1);                   // Argument number (1-based)
+    if (ctx.debug_enabled) {
+        // Go over all arguments and local variables and initialize their debug information
+        for(i=0; i < nreq; i++) {
+            jl_sym_t *argname = jl_decl_var(jl_cellref(largs,i));
+            jl_varinfo_t &varinfo = ctx.vars[argname];
+            varinfo.dinfo = ctx.dbuilder->createLocalVariable(
+                llvm::dwarf::DW_TAG_arg_variable,    // Tag
+                SP,         // Scope (current function will be fill in later)
+                argname->name,    // Variable name
+                fil,                    // File
+                ctx.lineno,             // Line (for now, use lineno of the function)
+                julia_type_to_di(varinfo.declType,ctx.dbuilder,specsig), // Variable type
+                false,                  // May be optimized out
+                0,                      // Flags (TODO: Do we need any)
+                i+1);                   // Argument number (1-based)
 
-    }
-    if (va) {
-        ctx.vars[ctx.vaName].dinfo = ctx.dbuilder->createLocalVariable(
-            llvm::dwarf::DW_TAG_arg_variable,    // Tag
-            SP,         // Scope (current function will be fill in later)
-            ctx.vaName->name, // Variable name
-            fil,                    // File
-            ctx.lineno,             // Line (for now, use lineno of the function)
-            julia_type_to_di(ctx.vars[ctx.vaName].declType,ctx.dbuilder,false),      // Variable type
-            false,                  // May be optimized out
-            0,                      // Flags (TODO: Do we need any)
-            nreq);                  // Argument number (1-based)
-    }
-    for(i=0; i < lvarslen; i++) {
-        jl_sym_t *s = (jl_sym_t*)jl_cellref(lvars,i);
-        jl_varinfo_t &varinfo = ctx.vars[s];
-        varinfo.dinfo = ctx.dbuilder->createLocalVariable(
-            llvm::dwarf::DW_TAG_auto_variable,    // Tag
-            SP,                     // Scope (current function will be fill in later)
-            s->name,                // Variable name
-            fil,                    // File
-            ctx.lineno,             // Line (for now, use lineno of the function)
-            julia_type_to_di(varinfo.declType,ctx.dbuilder,specsig), // Variable type
-            false,                  // May be optimized out
-            0,                      // Flags (TODO: Do we need any)
-            0);                   // Argument number (1-based)
+        }
+        if (va) {
+            ctx.vars[ctx.vaName].dinfo = ctx.dbuilder->createLocalVariable(
+                llvm::dwarf::DW_TAG_arg_variable,    // Tag
+                SP,         // Scope (current function will be fill in later)
+                ctx.vaName->name, // Variable name
+                fil,                    // File
+                ctx.lineno,             // Line (for now, use lineno of the function)
+                julia_type_to_di(ctx.vars[ctx.vaName].declType,ctx.dbuilder,false),      // Variable type
+                false,                  // May be optimized out
+                0,                      // Flags (TODO: Do we need any)
+                nreq);                  // Argument number (1-based)
+        }
+        for(i=0; i < lvarslen; i++) {
+            jl_sym_t *s = (jl_sym_t*)jl_cellref(lvars,i);
+            jl_varinfo_t &varinfo = ctx.vars[s];
+            varinfo.dinfo = ctx.dbuilder->createLocalVariable(
+                llvm::dwarf::DW_TAG_auto_variable,    // Tag
+                SP,                     // Scope (current function will be fill in later)
+                s->name,                // Variable name
+                fil,                    // File
+                ctx.lineno,             // Line (for now, use lineno of the function)
+                julia_type_to_di(varinfo.declType,ctx.dbuilder,specsig), // Variable type
+                false,                  // May be optimized out
+                0,                      // Flags (TODO: Do we need any)
+                0);                   // Argument number (1-based)
+        }
     }
 
     std::map<jl_sym_t *, MDNode *> filescopes;
@@ -3776,6 +3804,10 @@ static Function *emit_function(jl_lambda_info_t *lam, bool cstyle)
             else {
                 // if this argument hasn't been given space yet, we've decided
                 // to leave it in the input argument array.
+                if (ctx.debug_enabled) {
+                    dbuilder.insertDbgValueIntrinsic(theArg,0,ctx.vars[s].dinfo,builder.GetInsertBlock());
+                    //dbuilder.insertDeclare(argPtr, ctx.vars[s].dinfo, builder.GetInsertBlock());
+                }
                 ctx.vars[s].passedAs = theArg;
             }
         }
@@ -3787,7 +3819,8 @@ static Function *emit_function(jl_lambda_info_t *lam, bool cstyle)
                     theArg = boxed(theArg,&ctx,argType);
                     builder.CreateStore(theArg, lv); // temporarily root
                 }
-                dbuilder.insertDbgValueIntrinsic(theArg,0,ctx.vars[s].dinfo,builder.GetInsertBlock());
+                if (ctx.debug_enabled)
+                    dbuilder.insertDbgValueIntrinsic(theArg,0,ctx.vars[s].dinfo,builder.GetInsertBlock());
                 builder.CreateStore(builder.CreateCall(prepare_call(jlbox_func), theArg), lv);
             }
             else if (dyn_cast<GetElementPtrInst>(lv) != NULL) {
@@ -3869,7 +3902,7 @@ static Function *emit_function(jl_lambda_info_t *lam, bool cstyle)
         jl_value_t *stmt = jl_cellref(stmts,i);
         if (jl_is_linenode(stmt)) {
             lno = jl_linenode_line(stmt);
-            if (debug_enabled)
+            if (ctx.debug_enabled)
                 builder.SetCurrentDebugLocation(DebugLoc::get(lno, 1, (MDNode*)SP, NULL));
             if (do_coverage)
                 coverageVisitLine(filename, lno);
@@ -3893,7 +3926,7 @@ static Function *emit_function(jl_lambda_info_t *lam, bool cstyle)
                     }
                 }
             }
-            if (debug_enabled)
+            if (ctx.debug_enabled)
                 builder.SetCurrentDebugLocation(DebugLoc::get(lno, 1, scope, NULL));
             if (do_coverage)
                 coverageVisitLine(filename, lno);
@@ -3967,7 +4000,7 @@ static Function *emit_function(jl_lambda_info_t *lam, bool cstyle)
     }
 
     // step 18. Perform any delayed instantiations
-    if (debug_enabled)
+    if (ctx.debug_enabled)
         ctx.dbuilder->finalize();
 
     JL_GC_POP();
@@ -4134,7 +4167,11 @@ static void init_julia_llvm_env(Module *m)
     SmallVector<llvm::Value *, 1> Elts;
     Elts.push_back(jl_pvalue_dillvmt);
 
+#ifdef LLVM36
+    jl_value_dillvmt.setArrays(dbuilder.getOrCreateTypeArray(Elts));
+#else
     jl_value_dillvmt.setTypeArray(dbuilder.getOrCreateArray(Elts));
+#endif
 
     jl_ppvalue_dillvmt = dbuilder.createPointerType(jl_pvalue_dillvmt,sizeof(jl_value_t**)*8,
                                                 __alignof__(jl_value_t**)*8);
@@ -4146,8 +4183,13 @@ static void init_julia_llvm_env(Module *m)
     // Third argument (length(argv))
     diargs.push_back(julia_type_to_di((jl_value_t*)jl_int32_type,&dbuilder,false));
 
+#ifdef LLVM36
+    jl_di_func_sig = dbuilder.createSubroutineType(julia_h,
+        dbuilder.getOrCreateTypeArray(diargs));
+#else
     jl_di_func_sig = dbuilder.createSubroutineType(julia_h,
         dbuilder.getOrCreateArray(diargs));
+#endif
 
     jl_pvalue_llvmt = PointerType::get(jl_value_llvmt, 0);
     jl_ppvalue_llvmt = PointerType::get(jl_pvalue_llvmt, 0);
