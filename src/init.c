@@ -80,6 +80,7 @@ DLLEXPORT void gdblookup(ptrint_t ip);
 
 char *julia_home = NULL;
 jl_compileropts_t jl_compileropts = { NULL, // build_path
+                                      NULL, // cpu_target ("native", "core2", etc...)
                                       0,    // code_coverage
                                       0,    // malloc_log
                                       JL_COMPILEROPT_CHECK_BOUNDS_DEFAULT,
@@ -799,6 +800,14 @@ void julia_init(char *imageFile)
     jl_init_frontend();
     jl_init_types();
     jl_init_tasks(jl_stack_lo, jl_stack_hi-jl_stack_lo);
+
+    // If we are able to load the imageFile and get a cpu_target, use that unless user has overridden
+    if (jl_compileropts.cpu_target == NULL) {
+        const char * sysimg_cpu_target = jl_get_system_image_cpu_target(imageFile);
+
+        // If we can't load anything from the sysimg, default to native
+        jl_compileropts.cpu_target = sysimg_cpu_target ? sysimg_cpu_target : "native";
+    }
     jl_init_codegen();
     jl_an_empty_cell = (jl_value_t*)jl_alloc_cell_1d(0);
 
