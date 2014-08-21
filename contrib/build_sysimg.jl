@@ -18,7 +18,7 @@ function build_sysimg(sysimg_path; force=false, cpu_target="native")
         ld = find_system_linker()
 
         # Ensure we have write-permissions to wherever we're trying to write to
-        if !success(`touch $sysimg_path.$(Sys.dlext)`)
+        if !iswritable("$sysimg_path.$(Sys.dlext)")
             error("$sysimg_path unwritable, ensure parent directory exists and is writable! (Do you need to run this with sudo?)")
         end
 
