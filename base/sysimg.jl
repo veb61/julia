@@ -52,6 +52,9 @@ include("abstractarray.jl")
 include("reduce.jl")
 
 include("subarray.jl")
+include("arraytypes.jl")
+include("arrayviews.jl")
+using .ArrayViews
 include("array.jl")
 include("bitarray.jl")
 include("intset.jl")
