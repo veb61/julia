@@ -93,6 +93,11 @@ size{T,N}(a::ArrayView{T,N}, d::Integer) = getdim(size(a), d)
 
 pointer(a::ArrayView) = pointer(parent(a), offset(a)+1)
 convert{T}(::Type{Ptr{T}}, a::ArrayView{T}) = pointer(a)
+convert(::Type{Array}, a::ContiguousView) = begin
+    copy = similar(a)
+    unsafe_copy!(pointer(copy), pointer(a), a.len)
+    copy
+end
 
 similar{T}(a::ArrayView{T}) = Array(T, size(a))
 similar{T}(a::ArrayView{T}, dims::Dims) = Array(T, dims)
