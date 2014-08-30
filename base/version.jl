@@ -201,7 +201,9 @@ catch e
     global const VERSION = VersionNumber(0)
 end
 
-function banner(io::IO = STDOUT)
+function banner(io::IO=STDOUT) "\n" end
+#=
+function banner(io::IO = STDOUT) 
     if GIT_VERSION_INFO.tagged_commit
         commit_string = TAGGED_RELEASE_BANNER
     elseif GIT_VERSION_INFO.commit == ""
@@ -253,3 +255,4 @@ function banner(io::IO = STDOUT)
         """)
     end
 end
+=#

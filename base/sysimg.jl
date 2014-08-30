@@ -10,14 +10,14 @@ include = Core.include
 
 include("exports.jl")
 
-if false
+if true
     # simple print definitions for debugging. enable these if something
     # goes wrong during bootstrap before printing code is available.
-    show(x::ANY) = ccall(:jl_static_show, Void, (Ptr{Void}, Any),
-                         Intrinsics.pointerref(Intrinsics.cglobal(:jl_uv_stdout,Ptr{Void}),1), x)
-    print(x::ANY) = show(x)
+    #show(x::ANY) = ccall(:jl_static_show, Void, (Ptr{Void}, Any),
+    #                     Intrinsics.pointerref(Intrinsics.cglobal(:jl_uv_stdout,Ptr{Void}),1), x)
+    #print(x::ANY) = show(x)
     println(x::ANY) = ccall(:jl_, Void, (Any,), x)
-    print(a::ANY...) = for x=a; print(x); end
+    #print(a::ANY...) = for x=a; print(x); end
 end
 
 
@@ -54,8 +54,10 @@ include("reduce.jl")
 include("subarray.jl")
 include("arraytypes.jl")
 include("arrayviews.jl")
-using .ArrayViews
+
+importall .ArrayViews
 include("array.jl")
+
 include("bitarray.jl")
 include("intset.jl")
 include("dict.jl")
@@ -73,6 +75,9 @@ include("osutils.jl")
 const DL_LOAD_PATH = ByteString[]
 @osx_only push!(DL_LOAD_PATH, "@executable_path/../lib/julia")
 @osx_only push!(DL_LOAD_PATH, "@executable_path/../lib")
+
+convert{T,N,M}(::Type{Array{T,N}}, a::ContiguousView{T,N,M}) =
+    (na = similar(a); unsafe_copy!(pointer(na), pointer(a), a.len); na)
 
 # strings & printing
 include("char.jl")
@@ -115,7 +120,20 @@ importall .Multimedia
 ccall(:jl_get_uv_hooks, Void, ()) # TODO: should put this in _init
 include("grisu.jl")
 import .Grisu.print_shortest
+
+m = getfield(methods(convert), :defs)
+while getfield(m, :next) != ()
+    ccall(:jl_, Void, (Any,), getfield(m, :sig))
+    m = getfield(m, :next)
+end
+
+a = ones(Uint8, 10)[1:3]
+ccall(:jl_, Void, (Any,), a)
+b = convert(Array{Uint8, 1}, a)
+ccall(:jl_, Void, (Any,), b)
+
 include("file.jl")
+
 include("methodshow.jl")
 
 # core math functions
@@ -135,7 +153,7 @@ include("primes.jl")
 
 # concurrency and parallelism
 include("serialize.jl")
-include("multi.jl")
+#include("multi.jl")
 
 # Polling (requires multi.jl)
 include("poll.jl")
@@ -185,96 +203,94 @@ big(z::Complex) = complex(big(real(z)),big(imag(z)))
 include("hashing2.jl")
 
 # random number generation
-include("dSFMT.jl")
-include("random.jl")
-importall .Random
+#include("dSFMT.jl")
+#include("random.jl")
+#importall .Random
 
 # distributed arrays and memory-mapped arrays
-include("darray.jl")
-include("mmap.jl")
-include("sharedarray.jl")
-include("arrayviews.jl")
-using .ArrayViews
+#include("darray.jl")
+#include("mmap.jl")
+#include("sharedarray.jl")
 
 # utilities - version, timing, help, edit, metaprogramming
 include("version.jl")
 include("datafmt.jl")
 importall .DataFmt
 include("deepcopy.jl")
-include("interactiveutil.jl")
+#include("interactiveutil.jl")
 include("replutil.jl")
 include("test.jl")
 include("meta.jl")
 include("i18n.jl")
-include("help.jl")
+#include("help.jl")
 using .I18n
-using .Help
-push!(I18n.CALLBACKS, Help.clear_cache)
+#using .Help
+#push!(I18n.CALLBACKS, Help.clear_cache)
 
 # SIMD loops
 include("simdloop.jl")
 importall .SimdLoop
 
 # frontend
-include("Terminals.jl")
-include("LineEdit.jl")
-include("REPLCompletions.jl")
-include("REPL.jl")
-include("client.jl")
+#include("Terminals.jl")
+#include("LineEdit.jl")
+#include("REPLCompletions.jl")
+#include("REPL.jl")
+#include("client.jl")
 
 # (s)printf macros
-include("printf.jl")
-importall .Printf
+#include("printf.jl")
+#importall .Printf
 
 # misc useful functions & macros
-include("util.jl")
+#include("util.jl")
 
 # sparse matrices and linear algebra
-include("sparse.jl")
-importall .SparseMatrix
-include("linalg.jl")
-importall .LinAlg
-const ⋅ = dot
-const × = cross
-include("broadcast.jl")
-importall .Broadcast
+#include("sparse.jl")
+#importall .SparseMatrix
+#include("linalg.jl")
+#importall .LinAlg
+#const ⋅ = dot
+#const × = cross
+#include("broadcast.jl")
+#importall .Broadcast
 
 # statistics
-include("statistics.jl")
+#include("statistics.jl")
 
 # signal processing
-include("fftw.jl")
-include("dsp.jl")
-importall .DSP
+#include("fftw.jl")
+#include("dsp.jl")
+#importall .DSP
 
 # system information
 include("sysinfo.jl")
 import .Sys.CPU_CORES
 
 # mathematical constants
-include("constants.jl")
+#include("constants.jl")
 
 # Numerical integration
-include("quadgk.jl")
-importall .QuadGK
+#include("quadgk.jl")
+#importall .QuadGK
 
 # deprecated functions
-include("deprecated.jl")
+#include("deprecated.jl")
 
 # package manager
-include("pkg.jl")
-const Git = Pkg.Git
+#include("pkg.jl")
+#const Git = Pkg.Git
 
 # base graphics API
-include("graphics.jl")
+#include("graphics.jl")
 
 # profiler
-include("profile.jl")
-importall .Profile
+#include("profile.jl")
+#importall .Profile
 
 # dates
-include("Dates.jl")
-import .Dates: Date, DateTime, now
+#include("Dates.jl")
+#import .Dates: Date, DateTime, now
 
 function __init__()
     # Base library init
@@ -283,7 +299,7 @@ function __init__()
     fdwatcher_init()
 end
 
-include("precompile.jl")
+#include("precompile.jl")
 
 include = include_from_node1
 

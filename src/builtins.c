@@ -581,7 +581,7 @@ JL_CALLABLE(jl_f_field_type)
 JL_CALLABLE(jl_f_convert_default)
 {
     jl_value_t *to = args[0];
-    jl_value_t *x = args[1];
+    jl_value_t *x  = args[1];
     if (!jl_subtype(x, (jl_value_t*)to, 1)) {
         jl_no_method_error((jl_function_t*)args[2], args, 2);
     }

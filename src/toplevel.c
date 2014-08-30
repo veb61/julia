@@ -520,7 +520,7 @@ jl_value_t *jl_toplevel_eval(jl_value_t *v)
 // repeatedly call jl_parse_next and eval everything
 jl_value_t *jl_parse_eval_all(char *fname)
 {
-    //jl_printf(JL_STDERR, "***** loading %s\n", fname);
+    // jl_printf(JL_STDERR, "***** loading %s\n", fname);
     int last_lineno = jl_lineno;
     jl_lineno=0;
     jl_value_t *fn=NULL, *ln=NULL, *form=NULL, *result=jl_nothing;

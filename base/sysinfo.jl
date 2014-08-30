@@ -55,7 +55,7 @@ end
 CPUinfo(info::UV_cpu_info_t) = CPUinfo(bytestring(info.model), info.speed,
     info.cpu_times!user, info.cpu_times!nice, info.cpu_times!sys,
     info.cpu_times!idle, info.cpu_times!irq)
-
+#=
 function show(io::IO, info::CPUinfo, header::Bool=true, prefix::String="    ")
     tck = SC_CLK_TCK
     if header
@@ -74,7 +74,7 @@ function show(io::IO, info::CPUinfo, header::Bool=true, prefix::String="    ")
         @printf io "%5d MHz  %9d  %9d  %9d  %9d  %9d ticks" info.speed info.cpu_times!user info.cpu_times!nice info.cpu_times!sys info.cpu_times!idle info.cpu_times!irq
     end
 end
-
+=#
 function _cpu_summary(io::IO, cpu::Array{CPUinfo}, i, j)
     if j-i < 9
         header = true

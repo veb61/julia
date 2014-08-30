@@ -1151,8 +1151,7 @@ jl_methlist_t *jl_method_list_insert(jl_methlist_t **pml, jl_tuple_t *type,
             if (check_amb && l->func->linfo && method->linfo &&
                 (l->func->linfo->module != method->linfo->module) &&
                 // special case: allow adding Array() methods in Base
-                (pml != &((jl_methtable_t*)jl_array_type->env)->defs ||
-                 method->linfo->module != jl_base_module)) {
+                (pml != &((jl_methtable_t*)jl_array_type->env)->defs || method->linfo->module != jl_base_module)) {
                 jl_module_t *newmod = method->linfo->module;
                 jl_value_t *errstream = jl_stderr_obj();
                 JL_STREAM *s = JL_STDERR;
@@ -1168,8 +1167,7 @@ jl_methlist_t *jl_method_list_insert(jl_methlist_t **pml, jl_tuple_t *type,
             l->sig = type;
             l->tvars = tvars;
             l->va = (jl_tuple_len(type) > 0 &&
-                     jl_is_vararg_type(jl_tupleref(type,jl_tuple_len(type)-1))) ?
-                1 : 0;
+                     jl_is_vararg_type(jl_tupleref(type,jl_tuple_len(type)-1))) ? 1 : 0;
             l->invokes = (struct _jl_methtable_t *)JL_NULL;
             l->func = method;
             JL_SIGATOMIC_END();
@@ -1521,7 +1519,7 @@ DLLEXPORT void jl_compile_hint(jl_function_t *f, jl_tuple_t *types)
     (void)jl_get_specialization(f, types);
 }
 
-#ifdef JL_TRACE
+//#ifdef JL_TRACE
 static int trace_en = 0;
 static int error_en = 1;
 static void __attribute__ ((unused)) enable_trace(int x) { trace_en=x; }
@@ -1534,7 +1532,7 @@ static void show_call(jl_value_t *F, jl_value_t **args, uint32_t nargs)
     }
     JL_PRINTF(JL_STDOUT, ")\n");
 }
-#endif
+//#endif
 
 JL_CALLABLE(jl_apply_generic)
 {
@@ -1542,10 +1540,10 @@ JL_CALLABLE(jl_apply_generic)
 #ifdef JL_GF_PROFILE
     mt->ncalls++;
 #endif
-#ifdef JL_TRACE
+//#ifdef JL_TRACE
     if (trace_en)
         show_call(F, args, nargs);
-#endif
+//#endif
     /*
       search order:
       look at concrete signatures
@@ -1581,10 +1579,10 @@ JL_CALLABLE(jl_apply_generic)
     mfunc = jl_mt_assoc_by_type(mt, tt, 1, 0);
 
     if (mfunc == jl_bottom_func) {
-#ifdef JL_TRACE
+//#ifdef JL_TRACE
         if (error_en)
             show_call(F, args, nargs);
-#endif
+//#endif
         JL_GC_POP();
         return jl_no_method_error((jl_function_t*)F, args, nargs);
     }
@@ -1628,6 +1626,7 @@ jl_value_t *jl_gf_invoke(jl_function_t *gf, jl_tuple_t *types,
     }
 
     if (m == JL_NULL) {
+	printf("djkljaldkfjflkdasjflkj\n");
         return jl_no_method_error(gf, args, nargs);
     }
 

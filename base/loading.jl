@@ -41,7 +41,7 @@ require(f::String, fs::String...) = (require(f); for x in fs require(x); end)
 
 # only broadcast top-level (not nested) requires and reloads
 toplevel_load = true
-
+#= XXX
 function require(name::String)
     path = find_in_node1_path(name)
     path == nothing && error("$name not found")
@@ -55,7 +55,7 @@ function require(name::String)
     end
     nothing
 end
-
+=#
 function _require(path)
     global toplevel_load
     if haskey(package_list,path)
@@ -70,7 +70,7 @@ function _require(path)
         end
     end
 end
-
+#= XXX
 function reload(name::String)
     global toplevel_load
     path = find_in_node1_path(name)
@@ -91,6 +91,7 @@ function reload(name::String)
     end
     nothing
 end
+=#
 
 # remote/parallel load
 

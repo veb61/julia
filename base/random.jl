@@ -31,7 +31,7 @@ function srand(r::MersenneTwister, seed)
 end
 
 ## initialization
-
+#=
 function __init__()
 
 @unix_only begin
@@ -54,7 +54,7 @@ end
     srand(a)
 end
 end
-
+=#
 ## srand()
 
 function srand(seed::Vector{Uint32})

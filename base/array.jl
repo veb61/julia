@@ -1443,3 +1443,17 @@ for (f, op) = ((:cummin, :min), (:cummax, :max))
 
     @eval ($f)(A::AbstractArray) = ($f)(A, 1)
 end
+
+# Array Views
+#=
+function convert{T,N,M}(::Type{Array{T,N}}, a::ArrayView{T,N,M})
+    copy = similar(a)
+    unsafe_copy!(pointer(copy), pointer(a), a.len)
+    copy
+end
+
+a = ones(Uint8, 10)[1:3]
+ccall(:jl_, Void, (Any,), a)
+b = convert(Vector{Uint8}, a)
+ccall(:jl_, Void, (Any,), b)
+=#
