@@ -108,13 +108,13 @@ nb_available(io::IOBuffer) = io.size - io.ptr + 1
 position(io::IOBuffer) = io.ptr-1
 
 function skip(io::IOBuffer, n::Integer)
-    io.ptr = min(io.ptr + n, io.size+1)
+    io.ptr = max(min(io.ptr + n, io.size+1), 1)
     return io
 end
 
 function seek(io::IOBuffer, n::Integer)
     !io.seekable && (!ismarked(io) || n!=io.mark) && error("seek failed")
-    io.ptr = min(n+1, io.size+1)
+    io.ptr = max(min(n+1, io.size+1), 1)
     return io
 end
 
