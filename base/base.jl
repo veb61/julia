@@ -92,6 +92,10 @@ end
 
 type EOFError <: Exception end
 
+type IOError <: Exception
+    msg::String
+end
+
 type DimensionMismatch <: Exception
     name::ASCIIString
 end

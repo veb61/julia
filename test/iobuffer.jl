@@ -36,7 +36,7 @@ truncate(io, 0)
 @test takebuf_string(io) == ""
 close(io)
 @test_throws ErrorException write(io,Uint8[0])
-@test_throws ErrorException seek(io,0)
+@test_throws IOError seek(io,0)
 @test eof(io)
 end
 
@@ -64,7 +64,7 @@ Base.compact(io)
 @test readline(io) == "waffles\n"
 @test write(io,"whipped cream\n") > 0
 @test readline(io) == "blueberries\n"
-@test_throws ErrorException seek(io,0)
+@test_throws IOError seek(io,0)
 @test_throws ErrorException truncate(io,0)
 @test readline(io) == "whipped cream\n"
 Base.compact(io)
@@ -130,8 +130,8 @@ end
 
 # issue #8193
 let io=IOBuffer("asdf")
-    seek(io, -1)
-    @test position(io) == 0
-    skip(io, -1)
-    @test position(io) == 0
+    @test_throws IOError skip(io, -1)
+    @test_throws IOError skip(io, 6)
+    @test_throws IOError seek(io, -1)
+    @test_throws IOError seek(io, 6)
 end

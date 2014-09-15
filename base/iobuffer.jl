@@ -108,13 +108,16 @@ nb_available(io::IOBuffer) = io.size - io.ptr + 1
 position(io::IOBuffer) = io.ptr-1
 
 function skip(io::IOBuffer, n::Integer)
-    io.ptr = max(min(io.ptr + n, io.size+1), 1)
+    seekto = io.ptr + n
+    (seekto < 1 || seekto > io.size+1) && throw(IOError("Attempt to seek outside IOBuffer boundaries."))
+    io.ptr = seekto
     return io
 end
 
 function seek(io::IOBuffer, n::Integer)
-    !io.seekable && (!ismarked(io) || n!=io.mark) && error("seek failed")
-    io.ptr = max(min(n+1, io.size+1), 1)
+    !io.seekable && (!ismarked(io) || n!=io.mark) && throw(IOError("Not seekable"))
+    (n < 0 || n > io.size) && throw(IOError("Attempted to seek outside IOBuffer boundaries."))
+    io.ptr = n+1
     return io
 end
 

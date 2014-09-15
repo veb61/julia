@@ -142,6 +142,7 @@ export
     DimensionMismatch,
     EOFError,
     ErrorException,
+    IOError,
     KeyError,
     LoadError,
     MethodError,
