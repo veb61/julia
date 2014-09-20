@@ -159,7 +159,7 @@ end
     end
     uv_error("symlink",err)
 end
-@windowsxp_only symlink(p::String, np::String) = 
+@windowsxp_only symlink(p::String, np::String) =
     error("WindowsXP does not support soft symlinks")
 
 function write(f::File, buf::Ptr{Uint8}, len::Integer, offset::Integer=-1)

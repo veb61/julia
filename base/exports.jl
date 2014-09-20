@@ -194,7 +194,7 @@ export
     ≠,
     !==,
     ≡,
-    ≢, 
+    ≢,
     $,
     %,
     &,
@@ -1219,7 +1219,7 @@ export
 # shared arrays
     sdata,
     indexpids,
-    
+
 # paths and file names
     abspath,
     basename,
