@@ -724,22 +724,27 @@
       (map (lambda (x) (gensy)) field-names)
       field-names))
 
-(define (default-inner-ctors name field-names field-types gen-specific?)
-  (let* ((field-names (safe-field-names field-names field-types))
-	 (any-ctor
-	  ;; definition with Any for all arguments
-	  `(function (call ,name ,@field-names)
-		     (block
-		      (call new ,@field-names)))))
-    (if gen-specific?
-	(list
-	 ;; definition with field types for all arguments
-	 `(function (call ,name
-			  ,@(map make-decl field-names field-types))
-		    (block
-		     (call new ,@field-names)))
-	 any-ctor)
-	(list any-ctor))))
+(define (default-inner-ctors name field-names field-types gen-specific? mutabl)
+  (let* ((arg-names (safe-field-names field-names field-types))
+         (any-ctor `(function (call ,name ,@arg-names)
+                              (block (call new ,@arg-names))))
+         (ctors (if gen-specific?
+	            (list
+                     ;; definition with field types for all arguments
+	             `(function (call ,name ,@(map make-decl arg-names field-types))
+		                (block (call new ,@arg-names)))
+	             any-ctor)
+	            (list any-ctor))))
+    (if (and (not mutabl)
+             (length> field-names 1)
+             (eq? arg-names field-names))
+        (let ((g (gensy)))
+          (cons `(function (call ,name
+                                 (parameters ,@(map (lambda (k) `(kw ,k (|.| ,g ',k))) field-names))
+                                 (|::| ,g ,name))
+                           (block (call new ,@field-names)))
+                ctors))
+        ctors)))
 
 (define (default-outer-ctor name field-names field-types params bounds)
   (let ((field-names (safe-field-names field-names field-types)))
@@ -828,7 +833,7 @@
 	  (field-names (map decl-var fields))
 	  (field-types (map decl-type fields))
 	  (defs2 (if (null? defs)
-		     (default-inner-ctors name field-names field-types (null? params))
+		     (default-inner-ctors name field-names field-types (null? params) mut)
 		     defs)))
      (for-each (lambda (v)
 		 (if (not (symbol? v))
