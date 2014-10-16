@@ -149,4 +149,4 @@ end
     @timeit printfd(100000) "printfd" "Printing to a file descriptor"
 end
 
-@maxrss "micro"
+maxrss("micro")
