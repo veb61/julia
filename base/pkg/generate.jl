@@ -137,6 +137,9 @@ function travis(pkg::AbstractString; force::Bool=false)
     genfile(pkg,".travis.yml",force) do io
         print(io, """
         language: cpp
+        os:
+          - linux
+          - osx
         compiler:
           - clang
         notifications:
@@ -146,10 +149,7 @@ function travis(pkg::AbstractString; force::Bool=false)
             - JULIAVERSION="juliareleases"
             - JULIAVERSION="julianightlies"
         before_install:
-          - sudo add-apt-repository ppa:staticfloat/julia-deps -y
-          - sudo add-apt-repository ppa:staticfloat/\${JULIAVERSION} -y
-          - sudo apt-get update -qq -y
-          - sudo apt-get install libpcre3-dev julia -y
+          - curl http://julialang.org/install-julia.sh | sh -s \$JULIAVERSION
           - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
         script:
           - julia --check-bounds=yes -e 'versioninfo(); Pkg.init(); Pkg.clone(pwd()); Pkg.test("$pkg")'
