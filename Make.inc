@@ -74,7 +74,11 @@ endif
 
 JULIA_VERSION = $(shell cat $(JULIAHOME)/VERSION)
 ifneq ($(NO_GIT), 1)
+ifeq ($(shell git describe --tags --exact-match 2>/dev/null && echo "true"), true)
+JULIA_COMMIT = $(shell git describe --tags --abbrev=0 | tail -c +2)
+else
 JULIA_COMMIT = $(shell git rev-parse --short=10 HEAD)
+endif
 else
 JULIA_COMMIT = $(JULIA_VERSION)
 endif
