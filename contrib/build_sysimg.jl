@@ -81,6 +81,11 @@ function find_system_linker()
 
     # On Windows, check to see if WinRPM is installed, and if so, see if binutils is installed
     @windows_only try
+        # Silently fail on windows if LLVM < 3.5
+        if convert(VersionNumber, Base.libllvm_version) < v"3.5.0"
+            return nothing
+        end
+
         using WinRPM
         if WinRPM.installed("binutils")
             ENV["PATH"] = "$(ENV["PATH"]):$(joinpath(WinRPM.installdir,"usr","$(Sys.ARCH)-w64-mingw32","sys-root","mingw","bin"))"
