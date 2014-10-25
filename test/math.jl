@@ -43,12 +43,12 @@ for T = (Float32,Float64,Rational{Int})
     @test cospi(convert(T,-1.5))::fT === zero(fT)
 
     # check exact values
-    @test sind(convert(T,30)) == 0.5
-    @test cosd(convert(T,60)) == 0.5
-    @test sind(convert(T,150)) == 0.5
-    @test sinpi(one(T)/convert(T,6)) == 0.5
-    T != Float32 && @test cospi(one(T)/convert(T,3)) == 0.5
-    T == Rational{Int} && @test sinpi(5//6) == 0.5
+    @test_approx_eq sind(convert(T,30)) 0.5
+    @test_approx_eq cosd(convert(T,60)) 0.5
+    @test_approx_eq sind(convert(T,150)) 0.5
+    @test_approx_eq sinpi(one(T)/convert(T,6)) 0.5
+    @test_approx_eq cospi(one(T)/convert(T,3)) 0.5
+    T == Rational{Int} && @test_approx_eq sinpi(5//6) 0.5
 end
 
 

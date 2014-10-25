@@ -271,7 +271,7 @@ function ishermitian(A::AbstractMatrix)
     m, n = size(A)
     m==n || return false
     for i = 1:n, j = i:n
-        if A[i,j] != ctranspose(A[j,i])
+        if !isapprox( A[i,j], ctranspose(A[j,i]) )
             return false
         end
     end

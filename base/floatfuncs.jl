@@ -108,6 +108,14 @@ isapprox(z::Complex, w::Complex; rtol::Real=rtoldefault(abs(z), abs(w)), atol::R
 isapprox(x::Real, z::Complex; rtol::Real=rtoldefault(x, abs(z)), atol::Real=atoldefault(x, abs(z))) = isapprox(complex(x), z; rtol=rtol, atol=atol)
 isapprox(z::Complex, x::Real; rtol::Real=rtoldefault(x, abs(z)), atol::Real=atoldefault(x, abs(z))) = isapprox(complex(x), z; rtol=rtol, atol=atol)
 
+# arrays
+function isapprox(x::AbstractArray, y::AbstractArray, rtol::Real=0, atol::Real=0)
+    if size(x) != size(y)
+        throw(DimensionError("Argument dimensions must match ($(size(x)) != $(size(y)))"))
+    end
+    return all([isapprox(x[i], y[i]) for i in 1:length(x)])
+end
+
 # default tolerance arguments
 rtoldefault(x::FloatingPoint, y::FloatingPoint) = cbrt(max(eps(x), eps(y)))
 atoldefault(x::FloatingPoint, y::FloatingPoint) = sqrt(max(eps(x), eps(y)))
