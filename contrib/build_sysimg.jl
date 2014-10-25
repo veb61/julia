@@ -1,14 +1,17 @@
 # By default, put the system image next to libjulia
-build_sysimg(;force=false, cpu_target="native") = build_sysimg(joinpath(dirname(Sys.dlpath("libjulia")),"sys"), force=force, cpu_target=cpu_target)
+build_sysimg(; userimg_path=nothing, force=false, cpu_target="native") = build_sysimg(joinpath(dirname(Sys.dlpath("libjulia")),"sys"), userimg_path=userimg_path, force=force, cpu_target=cpu_target)
 
 # Build a system image binary at sysimg_path.dlext.  If a system image is already loaded, error out, or continue if force = true
-function build_sysimg(sysimg_path; force=false, cpu_target="native")
+function build_sysimg(sysimg_path; userimg_path=nothing, force=false, cpu_target="native")
     # Unless force == true, quit out if a sysimg is already loadable
     sysimg = dlopen_e("sys")
     if !force && sysimg != C_NULL
         println("System image already loaded at $(Sys.dlpath(sysimg)), pass \"force=true\" to override")
         return;
     end
+
+    # Canonicalize userimg_path before we enter the base_dir
+    userimg_path = abspath(userimg_path)
 
     # Enter base/ and setup some useful paths
     base_dir = dirname(Base.find_source_file("sysimg.jl"))
@@ -18,8 +21,16 @@ function build_sysimg(sysimg_path; force=false, cpu_target="native")
         ld = find_system_linker()
 
         # Ensure we have write-permissions to wherever we're trying to write to
-        if !iswritable("$sysimg_path.$(Sys.dlext)")
+        if !success(`touch $sysimg_path.$(Sys.dlext)`)
             error("$sysimg_path unwritable, ensure parent directory exists and is writable! (Do you need to run this with sudo?)")
+        end
+
+        # Copy in userimg.jl if it exists...
+        if userimg_path != nothing
+            if !isreadable(userimg_path)
+                error("$userimg_path is not readable, ensure it is an absolute path!")
+            end
+            cp(userimg_path, "userimg.jl")
         end
 
         # Start by building sys0.{ji,o}
@@ -45,9 +56,18 @@ function build_sysimg(sysimg_path; force=false, cpu_target="native")
         end
         @windows_only append!(FLAGS, ["-L$JULIA_HOME", "-ljulia", "-lssp"])
 
-        println("Linking sys.$(Sys.dlext)")
-        run(`$ld $FLAGS -o $sysimg_path.$(Sys.dlext) $sysimg_path.o`)
+        if ld != nothing
+            println("Linking sys.$(Sys.dlext)")
+            run(`$ld $FLAGS -o $sysimg_path.$(Sys.dlext) $sysimg_path.o`)
+        end
+
+        # Cleanup userimg.jl
+        try
+            rm("userimg.jl")
+        end
     end
+
+    println("System image built; run julia -J $sysimg_path.ji")
 end
 
 # Search for a linker to link sys.o into sys.dl_ext.  Honor LD environment variable, otherwise search for something we know works
@@ -59,17 +79,27 @@ function find_system_linker()
         return ENV["LD"]
     end
 
-    poss_linkers = ["ld", "link"]
+    # On Windows, check to see if WinRPM is installed, and if so, see if binutils is installed
+    @windows_only try
+        using WinRPM
+        if WinRPM.installed("binutils")
+            ENV["PATH"] = "$(ENV["PATH"]):$(joinpath(WinRPM.installdir,"usr","$(Sys.ARCH)-w64-mingw32","sys-root","mingw","bin"))"
+        else
+            throw()
+        end
+    catch
+        warn("binutils package not installed!  Install via WinRPM.install(\"binutils\") for faster sysimg load times" )
+    end
 
-    for linker in poss_linkers
-        try
-            if success(`which $linker`)
-                return linker
-            end
+
+    # See if `ld` exists
+    try
+        if success(`which ld`)
+            return "ld"
         end
     end
 
-    error( "No supported linker found (tried $(join(poss_linkers, ", "))), override with LD environment variable!" )
+    warn( "No supported linker found; sysimg load times will be longer!" )
 end
 
 if !isinteractive()
