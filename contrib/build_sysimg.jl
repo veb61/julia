@@ -58,6 +58,9 @@ function build_sysimg(sysimg_path; userimg_path=nothing, force=false, cpu_target
                 push!(FLAGS, "-macosx_version_min")
                 push!(FLAGS, "10.7")
             else
+                if OS_NAME == :Linux
+                    push!(FLAGS, "-shared")
+                end
                 push!(FLAGS, "--unresolved-symbols")
                 push!(FLAGS, "ignore-all")
             end
