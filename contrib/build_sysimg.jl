@@ -7,63 +7,71 @@ function build_sysimg(sysimg_path; userimg_path=nothing, force=false, cpu_target
     sysimg = dlopen_e("sys")
     if !force && sysimg != C_NULL
         println("System image already loaded at $(Sys.dlpath(sysimg)), pass \"force=true\" to override")
-        return;
+        return
     end
 
     # Canonicalize userimg_path before we enter the base_dir
-    userimg_path = abspath(userimg_path)
+    if userimg_path != nothing
+        userimg_path = abspath(userimg_path)
+    end
 
     # Enter base/ and setup some useful paths
     base_dir = dirname(Base.find_source_file("sysimg.jl"))
     cd(base_dir) do
-        julia = joinpath(JULIA_HOME, "julia")
-        julia_libdir = dirname(Sys.dlpath("libjulia"))
-        ld = find_system_linker()
-
-        # Ensure we have write-permissions to wherever we're trying to write to
-        if !success(`touch $sysimg_path.$(Sys.dlext)`)
-            error("$sysimg_path unwritable, ensure parent directory exists and is writable! (Do you need to run this with sudo?)")
-        end
-
-        # Copy in userimg.jl if it exists...
-        if userimg_path != nothing
-            if !isreadable(userimg_path)
-                error("$userimg_path is not readable, ensure it is an absolute path!")
-            end
-            cp(userimg_path, "userimg.jl")
-        end
-
-        # Start by building sys0.{ji,o}
-        sys0_path = joinpath(dirname(sysimg_path), "sys0")
-        println("Building sys0.o...")
-        println("$julia -C $cpu_target --build $sys0_path sysimg.jl")
-        run(`$julia -C $cpu_target --build $sys0_path sysimg.jl`)
-
-        # Bootstrap off of that to create sys.{ji,o}
-        println("Building sys.o...")
-        println("$julia -C $cpu_target --build $sysimg_path -J $sys0_path.ji -f sysimg.jl")
-        run(`$julia -C $cpu_target --build $sysimg_path -J $sys0_path.ji -f sysimg.jl`)
-
-        # Link sys.o into sys.$(dlext)
-        FLAGS = ["-L$julia_libdir"]
-        if OS_NAME == :Darwin
-            push!(FLAGS, "-dylib")
-            push!(FLAGS, "-undefined")
-            push!(FLAGS, "dynamic_lookup")
-        else
-            push!(FLAGS, "--unresolved-symbols")
-            push!(FLAGS, "ignore-all")
-        end
-        @windows_only append!(FLAGS, ["-L$JULIA_HOME", "-ljulia", "-lssp"])
-
-        if ld != nothing
-            println("Linking sys.$(Sys.dlext)")
-            run(`$ld $FLAGS -o $sysimg_path.$(Sys.dlext) $sysimg_path.o`)
-        end
-
-        # Cleanup userimg.jl
         try
-            rm("userimg.jl")
+            julia = joinpath(JULIA_HOME, "julia")
+            julia_libdir = dirname(Sys.dlpath("libjulia"))
+            ld = find_system_linker()
+
+            # Ensure we have write-permissions to wherever we're trying to write to
+            try
+                touch("$sysimg_path.$(Sys.dlext)")
+            catch
+                error("$sysimg_path unwritable, ensure parent directory exists and is writable! (Do you need to run this with sudo?)")
+            end
+
+            # Copy in userimg.jl if it exists...
+            if userimg_path != nothing
+                if !isreadable(userimg_path)
+                    error("$userimg_path is not readable, ensure it is an absolute path!")
+                end
+                cp(userimg_path, "userimg.jl")
+            end
+
+            # Start by building sys0.{ji,o}
+            sys0_path = joinpath(dirname(sysimg_path), "sys0")
+            println("Building sys0.o...")
+            println("$julia -C $cpu_target --build $sys0_path sysimg.jl")
+            run(`$julia -C $cpu_target --build $sys0_path sysimg.jl`)
+
+            # Bootstrap off of that to create sys.{ji,o}
+            println("Building sys.o...")
+            println("$julia -C $cpu_target --build $sysimg_path -J $sys0_path.ji -f sysimg.jl")
+            run(`$julia -C $cpu_target --build $sysimg_path -J $sys0_path.ji -f sysimg.jl`)
+
+            # Link sys.o into sys.$(dlext)
+            FLAGS = ["-L$julia_libdir"]
+            if OS_NAME == :Darwin
+                push!(FLAGS, "-dylib")
+                push!(FLAGS, "-undefined")
+                push!(FLAGS, "dynamic_lookup")
+                push!(FLAGS, "-macosx_version_min")
+                push!(FLAGS, "10.7")
+            else
+                push!(FLAGS, "--unresolved-symbols")
+                push!(FLAGS, "ignore-all")
+            end
+            @windows_only append!(FLAGS, ["-L$JULIA_HOME", "-ljulia", "-lssp"])
+
+            if ld != nothing
+                println("Linking sys.$(Sys.dlext)")
+                run(`$ld $FLAGS -o $sysimg_path.$(Sys.dlext) $sysimg_path.o`)
+            end
+        finally
+            # Cleanup userimg.jl
+            try
+                rm("userimg.jl")
+            end
         end
     end
 
@@ -73,8 +81,8 @@ end
 # Search for a linker to link sys.o into sys.dl_ext.  Honor LD environment variable, otherwise search for something we know works
 function find_system_linker()
     if haskey( ENV, "LD" )
-        if !success(`which $(ENV["LD"])`)
-            warn("Using linker override $(ENV["LD"]), but unable to find `$(ENV["LD"])`")
+        if !success(`$(ENV["LD"]) -v`)
+            warn("Using linker override $(ENV["LD"]), but unable to run `$(ENV["LD"]) -v`")
         end
         return ENV["LD"]
     end
@@ -99,7 +107,7 @@ function find_system_linker()
 
     # See if `ld` exists
     try
-        if success(`which ld`)
+        if success(`ld -v`)
             return "ld"
         end
     end
