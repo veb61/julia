@@ -328,11 +328,12 @@ static inline int gc_setmark_big(void *o, int mark_mode)
             big_objects_marked->prev = &hdr->next;
         big_objects_marked = hdr;
     }
-#ifdef OBJPROFILE
     if (!(bits & GC_MARKED)) {
+        scanned_bytes += hdr->sz;
+#ifdef OBJPROFILE
         objprofile_count(jl_typeof(o), mark_mode == GC_MARKED, hdr->sz);
-    }
 #endif
+    }
     _gc_setmark(o, mark_mode);
     verify_val(o);
     return mark_mode;
@@ -351,11 +352,12 @@ static inline int gc_setmark_pool(void *o, int mark_mode)
     if (bits == GC_QUEUED || bits == GC_MARKED) {
         mark_mode = GC_MARKED;
     }
-#ifdef OBJPROFILE
     if (!(bits & GC_MARKED)) {
+        scanned_bytes += page->osize;
+#ifdef OBJPROFILE
         objprofile_count(jl_typeof(o), mark_mode == GC_MARKED, page->osize);
-    }
 #endif
+    }
     _gc_setmark(o, mark_mode);
     page->gc_bits |= mark_mode;
     verify_val(o);
@@ -379,10 +381,10 @@ static inline int gc_setmark(void *o, int sz, int mark_mode)
 
 inline void gc_setmark_buf(void *o, int mark_mode)
 {
-#ifdef MEMDEBUG
-    return gc_setmark_big(o, mark_mode);
-#endif
     buff_t *buf = gc_val_buf(o);
+#ifdef MEMDEBUG
+    return gc_setmark_big(buf, mark_mode);
+#endif
     if (buf->pooled)
         gc_setmark_pool(buf, mark_mode);
     else
@@ -521,7 +523,7 @@ static inline int maybe_collect(void)
 DLLEXPORT void *jl_gc_counted_malloc(size_t sz)
 {
     maybe_collect();
-    allocd_bytes += sz;
+    //    allocd_bytes += sz;
     void *b = malloc(sz);
     if (b == NULL)
         jl_throw(jl_memory_exception);
@@ -531,13 +533,13 @@ DLLEXPORT void *jl_gc_counted_malloc(size_t sz)
 DLLEXPORT void jl_gc_counted_free(void *p, size_t sz)
 {
     free(p);
-    freed_bytes += sz;
+    //    freed_bytes += sz;
 }
 
 DLLEXPORT void *jl_gc_counted_realloc(void *p, size_t sz)
 {
     maybe_collect();
-    allocd_bytes += ((sz+1)/2);  // NOTE: wild guess at growth amount
+    //    allocd_bytes += ((sz+1)/2);  // NOTE: wild guess at growth amount
     void *b = realloc(p, sz);
     if (b == NULL)
         jl_throw(jl_memory_exception);
@@ -547,7 +549,7 @@ DLLEXPORT void *jl_gc_counted_realloc(void *p, size_t sz)
 DLLEXPORT void *jl_gc_counted_realloc_with_old_size(void *p, size_t old, size_t sz)
 {
     maybe_collect();
-    allocd_bytes += (sz-old);
+    //    allocd_bytes += (sz-old);
     void *b = realloc(p, sz);
     if (b == NULL)
         jl_throw(jl_memory_exception);
@@ -785,7 +787,7 @@ static bigval_t** sweep_big_list(int sweep_mask, bigval_t** pv)
                 nxt->prev = pv;
             freed_bytes += v->sz;
 #ifdef MEMDEBUG
-            memset(v, 0xbb, v->sz+BVOFFS*sizeof(void*));
+            memset(v, 0xbb, v->sz);
 #endif
             free_a16(v);
             big_freed++;
@@ -1165,7 +1167,7 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
         else {
             pfl = prev_pfl;
 #ifdef MEMDEBUG
-            memset(pg->data, 0xbb, GC_PAGE_SZ);
+            memset(PAGE_DATA(pg), 0xbb, GC_PAGE_SZ);
 #endif
             free_page(data);
 #ifdef MEMDEBUG
@@ -1313,7 +1315,11 @@ void jl_gc_setmark(jl_value_t *v) // TODO rename this as it is misleading now
     //    int64_t s = perm_scanned_bytes;
     if (!gc_marked(v)) {
         objprofile_count(jl_typeof(v), 1, 16);
+#ifdef MEMDEBUG
+        gc_setmark_big(v, GC_MARKED_NOESC);
+#else
         gc_setmark_pool(v, GC_MARKED_NOESC);
+#endif
     }
     //    perm_scanned_bytes = s;
 }
@@ -1472,21 +1478,29 @@ static int push_root(jl_value_t *v, int d, int bits)
     else if (((jl_datatype_t*)(vt))->name == jl_array_typename) {
         jl_array_t *a = (jl_array_t*)v;
         if (a->pooled)
-            MARK(a, bits = gc_setmark_pool(a, GC_MARKED_NOESC); if (a->how == 2) {
-                    objprofile_count(MATY, gc_bits(a) == GC_MARKED, array_nbytes(a));
-                    if (gc_bits(a) == GC_MARKED)
-                        perm_scanned_bytes += array_nbytes(a);
-                    else
-                        scanned_bytes += array_nbytes(a);
-                });
+            MARK(a,
+#ifdef MEMDEBUG
+                 bits = gc_setmark_big(a, GC_MARKED_NOESC);
+#else
+                 bits = gc_setmark_pool(a, GC_MARKED_NOESC);
+#endif
+                 if (a->how == 2) {
+                     objprofile_count(MATY, gc_bits(a) == GC_MARKED, array_nbytes(a));
+                     if (gc_bits(a) == GC_MARKED)
+                         perm_scanned_bytes += array_nbytes(a);
+                     else
+                         scanned_bytes += array_nbytes(a);
+                 });
         else
-            MARK(a, bits = gc_setmark_big(a, GC_MARKED_NOESC); if (a->how == 2) {
-                    objprofile_count(MATY, gc_bits(a) == GC_MARKED, array_nbytes(a));
-                    if (gc_bits(a) == GC_MARKED)
-                        perm_scanned_bytes += array_nbytes(a);
-                    else
-                        scanned_bytes += array_nbytes(a);
-                });
+            MARK(a,
+                 bits = gc_setmark_big(a, GC_MARKED_NOESC);
+                 if (a->how == 2) {
+                     objprofile_count(MATY, gc_bits(a) == GC_MARKED, array_nbytes(a));
+                     if (gc_bits(a) == GC_MARKED)
+                         perm_scanned_bytes += array_nbytes(a);
+                     else
+                         scanned_bytes += array_nbytes(a);
+                 });
         if (a->how == 3) {
             jl_value_t *owner = jl_array_data_owner(a);
             refyoung |= gc_push_root(owner, d);
@@ -1804,15 +1818,17 @@ static void clear_mark(int bits)
     pool_t* pool;
     gcpage_t* pg;
     gcval_t* pv;
+    if (!verifying) {
     for(int i = 0; i < 4; i++)
         bits_save[i].len = 0;
+    }
     
     bigval_t *bigs[] = { big_objects, big_objects_marked };
     for (int i = 0; i < 2; i++) {
         bigval_t *v = bigs[i];
         while (v != NULL) {
             void* gcv = &v->_data;
-            arraylist_push(&bits_save[gc_bits(gcv)], gcv);
+            if (!verifying) arraylist_push(&bits_save[gc_bits(gcv)], gcv);
             gc_bits(gcv) = bits;
             v = v->next;
         }
@@ -1830,7 +1846,7 @@ static void clear_mark(int bits)
                         pv = (gcval_t*)PAGE_DATA(pg);
                         char *lim = (char*)pv + GC_PAGE_SZ - pool->osize;
                         while ((char*)pv <= lim) {
-                            arraylist_push(&bits_save[gc_bits(pv)], pv);
+                            if (!verifying) arraylist_push(&bits_save[gc_bits(pv)], pv);
                             gc_bits(pv) = bits;
                             pv = (gcval_t*)((char*)pv + pool->osize);
                         }
@@ -1850,34 +1866,8 @@ static void restore(void)
     }
 }
 
-static void gc_verify(void)
+static void gc_verify_track()
 {
-    verifying = 1;
-    lostval = NULL;
-    lostval_parents.len = 0;
-    lostval_parents_done.len = 0;
-    check_timeout = 0;
-    clear_mark(GC_CLEAN);
-    gc_mark(0);
-    int clean_len = bits_save[GC_CLEAN].len;
-    for(int i = 0; i < clean_len + bits_save[GC_QUEUED].len; i++) {
-        gcval_t* v = (gcval_t*)bits_save[i >= clean_len ? GC_QUEUED : GC_CLEAN].items[i >= clean_len ? i - clean_len : i];
-        if (gc_marked(v)) {
-            JL_PRINTF(JL_STDOUT, "Error. Early free of 0x%lx type :", (uptrint_t)v);
-            jl_(jl_typeof(v));
-            JL_PRINTF(JL_STDOUT, "val : ");
-            jl_(v);
-            JL_PRINTF(JL_STDOUT, "Let's try to backtrack the missing write barrier :\n");
-            lostval = v;
-            break;
-        }
-    }
-    if (lostval == NULL) {
-        restore();  // we did not miss anything
-        verifying = 0;
-        return;
-    }
-    restore();
     do {
         arraylist_push(&lostval_parents_done, lostval);
         JL_PRINTF(JL_STDOUT, "Now looking for 0x%lx =======\n", lostval);
@@ -1911,6 +1901,37 @@ static void gc_verify(void)
         }
         restore();
     } while(lostval != NULL);
+}
+
+static void gc_verify(void)
+{
+    lostval = NULL;
+    lostval_parents.len = 0;
+    lostval_parents_done.len = 0;
+    check_timeout = 0;
+    clear_mark(GC_CLEAN);
+    verifying = 1;
+    gc_mark(0);
+    int clean_len = bits_save[GC_CLEAN].len;
+    for(int i = 0; i < clean_len + bits_save[GC_QUEUED].len; i++) {
+        gcval_t* v = (gcval_t*)bits_save[i >= clean_len ? GC_QUEUED : GC_CLEAN].items[i >= clean_len ? i - clean_len : i];
+        if (gc_marked(v)) {
+            JL_PRINTF(JL_STDOUT, "Error. Early free of 0x%lx type :", (uptrint_t)v);
+            jl_(jl_typeof(v));
+            JL_PRINTF(JL_STDOUT, "val : ");
+            jl_(v);
+            JL_PRINTF(JL_STDOUT, "Let's try to backtrack the missing write barrier :\n");
+            lostval = v;
+            break;
+        }
+    }
+    if (lostval == NULL) {
+        verifying = 0;
+        restore();  // we did not miss anything
+        return;
+    }
+    restore();
+    gc_verify_track();
     abort();
 }
 #endif
@@ -2065,7 +2086,7 @@ void jl_gc_collect(void)
 #endif
     }
 #ifdef GC_TIME
-    int64_t bonus = -1, SAVE = -1, SAVE2 = -1, SAVE3 = -1, pct = -1;
+    int64_t bonus = -1, SAVE = -1, SAVE2 = -1, SAVE3 = -1, pct = -1, est_fb = -1;
 #endif
 #if defined(GC_TIME) || defined(GC_FINAL_STATS)
     uint64_t post_time = 0, finalize_time = 0;
@@ -2090,9 +2111,11 @@ void jl_gc_collect(void)
                about the next collection, instead of waiting another cycle.
                However it has proven a bit annoying to get this number right given the many ways
                of allocating memory (shared arrays, ...). TODO */
-            //est_fb = live_bytes - scanned_bytes - perm_scanned_bytes + actual_allocd;
+            est_fb = live_bytes - scanned_bytes - perm_scanned_bytes + actual_allocd;
+            //est_fb too large
 #ifdef GC_VERIFY
-            gc_verify();
+            gc_verify_track();
+            //            gc_verify();
 #endif
 
 #if defined(MEMPROFILE)
@@ -2106,7 +2129,7 @@ void jl_gc_collect(void)
             total_allocd_bytes += allocd_bytes_since_sweep;
             
             // 5. next collection decision
-            if (quick_count >= gc_quick_steps) {
+            if (1 || quick_count >= gc_quick_steps) {
                 sweep_mask = GC_MARKED; // next collection is a full one
                 gc_steps = 1;
                 quick_count = 0;
@@ -2196,7 +2219,7 @@ void jl_gc_collect(void)
         total_fin_time += finalize_time + post_time;
 #endif
 #ifdef GC_TIME
-        JL_PRINTF(JL_STDOUT, "GC sweep pause %.2f ms live %ld kB (freed %d kB = %d%% of allocd %d kB b/r %ld/%ld) (%.2f ms in post_mark, %.2f ms in %d fin) (marked in %d inc) mask %d | next in %d kB\n", NS2MS(sweep_pause), live_bytes/1024, SAVE2/1024, pct, SAVE3/1024, bonus/1024, SAVE/1024, NS2MS(post_time), NS2MS(finalize_time), n_finalized, inc_count, sweep_mask, -allocd_bytes/1024);
+        JL_PRINTF(JL_STDOUT, "GC sweep pause %.2f ms live %ld kB (freed %d kB EST %d kB diff %d = %d%% of allocd %d kB b/r %ld/%ld) (%.2f ms in post_mark, %.2f ms in %d fin) (marked in %d inc) mask %d | next in %d kB\n", NS2MS(sweep_pause), live_bytes/1024, SAVE2, est_fb, (SAVE2 - est_fb), pct, SAVE3/1024, bonus/1024, SAVE/1024, NS2MS(post_time), NS2MS(finalize_time), n_finalized, inc_count, sweep_mask, -allocd_bytes/1024);
 #endif
     }
     n_pause++;
@@ -2207,6 +2230,7 @@ void jl_gc_collect(void)
 #endif
     JL_SIGATOMIC_END();
     jl_in_gc = 0;
+    if (est_fb != SAVE2) abort();
 }
 
 #if 0
@@ -2282,7 +2306,8 @@ void *allocb(size_t sz)
     buff_t *b;
     sz += sizeof(void*);
 #ifdef MEMDEBUG
-    b = alloc_big(sz);
+    b = (buff_t*)alloc_big(sz);
+    b->pooled = 0;
 #else
     if (sz > 2048) {
         b = (buff_t*)alloc_big(sz);
@@ -2293,7 +2318,7 @@ void *allocb(size_t sz)
         b->pooled = 1;
     }
 #endif
-    return b->data;
+    return &b->data;
 }
 
 void *reallocb(void *b, size_t sz)
