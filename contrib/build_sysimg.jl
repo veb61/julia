@@ -1,13 +1,17 @@
-# By default, put the system image next to libjulia
-build_sysimg(; userimg_path=nothing, force=false, cpu_target="native") = build_sysimg(joinpath(dirname(Sys.dlpath("libjulia")),"sys"), userimg_path=userimg_path, force=force, cpu_target=cpu_target)
+#!/usr/bin/env julia
 
-# Build a system image binary at sysimg_path.dlext.  If a system image is already loaded, error out, or continue if force = true
-function build_sysimg(sysimg_path; userimg_path=nothing, force=false, cpu_target="native")
-    # Unless force == true, quit out if a sysimg is already loadable
+# Build a system image binary at sysimg_path.dlext.  By default, put the system image next to libjulia
+# Allow insertion of a userimg via userimg_path.  If sysimg_path.dlext is currently loaded into memory,
+# don't continue unless force is set to true.  Allow targeting of a CPU architecture via cpu_target
+const default_sysimg_path = joinpath(dirname(Sys.dlpath("libjulia")),"sys")
+function build_sysimg(sysimg_path=default_sysimg_path, cpu_target="native", userimg_path=nothing; force=false)
+    # Quit out if a sysimg is already loaded and is in the same spot as sysimg_path, unless forcing
     sysimg = dlopen_e("sys")
-    if !force && sysimg != C_NULL
-        println("System image already loaded at $(Sys.dlpath(sysimg)), pass \"force=true\" to override")
-        return
+    if sysimg != C_NULL
+        if !force && Sys.dlpath(sysimg) == "$(sysimg_path).$(Sys.dlext)"
+            println("System image already loaded at $(Sys.dlpath(sysimg)), set force to override")
+            return
+        end
     end
 
     # Canonicalize userimg_path before we enter the base_dir
@@ -27,7 +31,9 @@ function build_sysimg(sysimg_path; userimg_path=nothing, force=false, cpu_target
             try
                 touch("$sysimg_path.$(Sys.dlext)")
             catch
-                error("$sysimg_path unwritable, ensure parent directory exists and is writable! (Do you need to run this with sudo?)")
+                err_msg =  "Unable to modify $sysimg_path.$(Sys.dlext), ensure parent directory exists "
+                err_msg *= "and is writable. Absolute paths work best. Do you need to run this with sudo?)"
+                error( err_msg )
             end
 
             # Copy in userimg.jl if it exists...
@@ -72,7 +78,7 @@ function build_sysimg(sysimg_path; userimg_path=nothing, force=false, cpu_target
             end
         finally
             # Cleanup userimg.jl
-            try
+            if isfile("userimg.jl")
                 rm("userimg.jl")
             end
         end
@@ -81,7 +87,7 @@ function build_sysimg(sysimg_path; userimg_path=nothing, force=false, cpu_target
     println("System image built; run julia -J $sysimg_path.ji")
 end
 
-# Search for a linker to link sys.o into sys.dl_ext.  Honor LD environment variable, otherwise search for something we know works
+# Search for a linker to link sys.o into sys.dl_ext.  Honor LD environment variable.
 function find_system_linker()
     if haskey( ENV, "LD" )
         if !success(`$(ENV["LD"]) -v`)
@@ -118,6 +124,25 @@ function find_system_linker()
     warn( "No supported linker found; sysimg load times will be longer!" )
 end
 
+# When running this file as a script, try to do so with default values.  If arguments are passed
+# in, use them as the arguments to build_sysimg above
 if !isinteractive()
-    build_sysimg()
+    if length(ARGS) > 4
+        println("Usage: build_sysimg.jl <sysimg_path> <cpu_target> <usrimg_path.jl> --force")
+        println("   <sysimg_path>    is an absolute, extensionless path to store the system image at")
+        println("   <cpu_target>     is an LLVM cpu target to build the system image against")
+        println("   <usrimg_path.lj> is the path to a user image to be baked into the system image")
+        println("   --force          Set if you wish to overwrite the default system image")
+        println()
+        println(" Example:")
+        println("   build_sysimg.jl /usr/local/lib/julia/sys core2 ~/my_usrimg.jl true")
+        println()
+        println(" Running this script with no arguments is equivalent to calling it via")
+        println("   build_sysimg.jl $(default_sysimg_path) native")
+        return 0
+    end
+
+    force_flag = "--force" in ARGS
+    filter!(x -> x != "--force", ARGS)
+    build_sysimg(ARGS..., force=force_flag)
 end
