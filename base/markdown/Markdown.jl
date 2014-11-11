@@ -1,6 +1,7 @@
 module Markdown
 
 typealias String AbstractString
+import Base: writemime
 
 include("parse/config.jl")
 include("parse/util.jl")
@@ -58,12 +59,6 @@ end
 macro doc_mstr(s, t...)
   s = Base.triplequoted(s)
   docexpr(s, t...)
-end
-
-function writemime(io::IO, m, md::Vector{MD})
-  for md in md
-    writemime(io, m, md)
-  end
 end
 
 function Base.display(d::Base.REPL.REPLDisplay, md::Vector{MD})
