@@ -692,12 +692,14 @@ DLLEXPORT jl_value_t *jl_method_def(jl_sym_t *name, jl_value_t **bp, jl_value_t 
                 gf = call_func;
                 name = call_sym;
                 // edit args, insert type first
-                if (!jl_is_expr(f->linfo->ast))
+                if (!jl_is_expr(f->linfo->ast)) {
                     f->linfo->ast = jl_uncompress_ast(f->linfo, f->linfo->ast);
+                    gc_wb(f->linfo, f->linfo->ast);
+                }
                 jl_array_t *al = jl_lam_args((jl_expr_t*)f->linfo->ast);
                 if (jl_array_len(al) == 0) {
                     al = jl_alloc_cell_1d(1);
-                    jl_exprarg(f->linfo->ast, 0) = (jl_value_t*)al;
+                    jl_exprargset(f->linfo->ast, 0, (jl_value_t*)al);
                 }
                 else {
                     jl_array_grow_beg(al, 1);

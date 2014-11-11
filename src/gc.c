@@ -10,7 +10,6 @@
 // will wait for the next GC, to allow the space to be reused more
 // efficiently. default = on.
 #define FREE_PAGES_EAGER
-
 #include <stdlib.h>
 #include <string.h>
 #include <strings.h>
@@ -41,6 +40,7 @@ extern "C" {
 #define REGION_PG_COUNT 8*4096 // 512M
 #endif
 #define HEAP_COUNT 8
+
 typedef struct {
     uint32_t freemap[REGION_PG_COUNT/32];
     char pages[REGION_PG_COUNT][GC_PAGE_SZ];
@@ -147,8 +147,6 @@ typedef struct _gcpage_t {
 static int64_t last_gc_total_bytes = 0;
 
 static int gc_inc_steps = 1;
-static int gc_quick_steps = 32;
-
 #ifdef _P64
 #define default_collect_interval (5600*1024*sizeof(void*))
 static size_t max_collect_interval = 1250000000UL;
@@ -160,7 +158,6 @@ static size_t max_collect_interval =  500000000UL;
 static int64_t allocd_bytes;
 static size_t collect_interval;
 
-static int gc_steps;
 #define N_POOLS 42
 static __attribute__((aligned (64))) pool_t norm_pools[N_POOLS];
 #define pools norm_pools
@@ -303,9 +300,9 @@ static inline void gc_setmark_other(void *o, int mark_mode)
     verify_val(o);
 }
 
-#define inc_sat(v,s) v = (v) >= s ? s : (v)+1;
+#define inc_sat(v,s) v = (v) >= s ? s : (v)+1
 #define PROMOTE_AGE 1
-
+int PROMDBG = 1;
 static inline int gc_setmark_big(void *o, int mark_mode)
 {
 #ifdef GC_VERIFY
@@ -329,7 +326,10 @@ static inline int gc_setmark_big(void *o, int mark_mode)
         big_objects_marked = hdr;
     }
     if (!(bits & GC_MARKED)) {
-        scanned_bytes += hdr->sz;
+        if (mark_mode == GC_MARKED)
+            perm_scanned_bytes += hdr->sz;
+        else
+            scanned_bytes += hdr->sz;
 #ifdef OBJPROFILE
         objprofile_count(jl_typeof(o), mark_mode == GC_MARKED, hdr->sz);
 #endif
@@ -353,7 +353,10 @@ static inline int gc_setmark_pool(void *o, int mark_mode)
         mark_mode = GC_MARKED;
     }
     if (!(bits & GC_MARKED)) {
-        scanned_bytes += page->osize;
+        if (mark_mode == GC_MARKED)
+            perm_scanned_bytes += page->osize;
+        else
+            scanned_bytes += page->osize;
 #ifdef OBJPROFILE
         objprofile_count(jl_typeof(o), mark_mode == GC_MARKED, page->osize);
 #endif
@@ -383,7 +386,8 @@ inline void gc_setmark_buf(void *o, int mark_mode)
 {
     buff_t *buf = gc_val_buf(o);
 #ifdef MEMDEBUG
-    return gc_setmark_big(buf, mark_mode);
+    gc_setmark_big(buf, mark_mode);
+    return;
 #endif
     if (buf->pooled)
         gc_setmark_pool(buf, mark_mode);
@@ -510,6 +514,7 @@ static inline void free_page(void *p)
     current_pg_count--;
 }
 
+//#define should_collect() (__unlikely(allocd_bytes>0 || allocd_bytes + collect_interval + total_allocd_bytes >= 4000171000))
 #define should_collect() (__unlikely(allocd_bytes>0))
 static inline int maybe_collect(void)
 {
@@ -523,7 +528,7 @@ static inline int maybe_collect(void)
 DLLEXPORT void *jl_gc_counted_malloc(size_t sz)
 {
     maybe_collect();
-    //    allocd_bytes += sz;
+    allocd_bytes += sz;
     void *b = malloc(sz);
     if (b == NULL)
         jl_throw(jl_memory_exception);
@@ -533,13 +538,13 @@ DLLEXPORT void *jl_gc_counted_malloc(size_t sz)
 DLLEXPORT void jl_gc_counted_free(void *p, size_t sz)
 {
     free(p);
-    //    freed_bytes += sz;
+    freed_bytes += sz;
 }
 
 DLLEXPORT void *jl_gc_counted_realloc(void *p, size_t sz)
 {
     maybe_collect();
-    //    allocd_bytes += ((sz+1)/2);  // NOTE: wild guess at growth amount
+    allocd_bytes += ((sz+1)/2);  // NOTE: wild guess at growth amount
     void *b = realloc(p, sz);
     if (b == NULL)
         jl_throw(jl_memory_exception);
@@ -549,7 +554,7 @@ DLLEXPORT void *jl_gc_counted_realloc(void *p, size_t sz)
 DLLEXPORT void *jl_gc_counted_realloc_with_old_size(void *p, size_t old, size_t sz)
 {
     maybe_collect();
-    //    allocd_bytes += (sz-old);
+    allocd_bytes += (sz-old);
     void *b = realloc(p, sz);
     if (b == NULL)
         jl_throw(jl_memory_exception);
@@ -559,15 +564,16 @@ DLLEXPORT void *jl_gc_counted_realloc_with_old_size(void *p, size_t old, size_t 
 void *jl_gc_managed_malloc(size_t sz)
 {
     maybe_collect();
+    allocd_bytes += sz;
     sz = (sz+15) & -16;
     void *b = malloc_a16(sz);
     if (b == NULL)
         jl_throw(jl_memory_exception);
-    allocd_bytes += sz;
+    //    jl_printf(JL_STDOUT, "M:%d\n", sz);
     return b;
 }
 
-void *jl_gc_managed_realloc(void *d, size_t sz, size_t oldsz, int isaligned)
+void *jl_gc_managed_realloc(void *d, size_t sz, size_t oldsz, int isaligned, jl_value_t* owner)
 {
     maybe_collect();
     sz = (sz+15) & -16;
@@ -591,7 +597,10 @@ void *jl_gc_managed_realloc(void *d, size_t sz, size_t oldsz, int isaligned)
 #endif
     if (b == NULL)
         jl_throw(jl_memory_exception);
-    allocd_bytes += (sz - oldsz);
+    if (gc_bits(owner) == GC_MARKED)
+        perm_scanned_bytes += (sz - oldsz);
+    else
+        allocd_bytes += (sz - oldsz);
     return b;
 }
 
@@ -653,7 +662,6 @@ static void sweep_weak_refs(void)
 }
 
 // finalization
-
 static htable_t finalizer_table;
 static arraylist_t to_finalize;
 
@@ -745,6 +753,7 @@ static __attribute__((noinline)) void *alloc_big(size_t sz)
 #endif
     v->sz = allocsz;
     v->flags = 0;
+    v->age = 0;
     v->next = big_objects;
     v->prev = &big_objects;
     if (v->next)
@@ -768,8 +777,9 @@ static bigval_t** sweep_big_list(int sweep_mask, bigval_t** pv)
             int age = v->age;
             int bits = gc_bits(&v->_data);
             if (age >= PROMOTE_AGE) {
-                if (sweep_mask == GC_MARKED || bits == GC_MARKED_NOESC)
+                if (sweep_mask == GC_MARKED || bits == GC_MARKED_NOESC) {
                     bits = GC_QUEUED;
+                }
             }
             else {
                 inc_sat(age, PROMOTE_AGE);
@@ -965,8 +975,11 @@ static inline  void *__pool_alloc(pool_t* p, int osize, int end_offset)
 {
     gcval_t *v, *end;
     if (__unlikely((allocd_bytes += osize) >= 0)) {
+        allocd_bytes -= osize;
         jl_gc_collect();
+        allocd_bytes += osize;
     }
+    
     if (__unlikely(!p->freelist)) {
         add_page(p);
     }
@@ -996,13 +1009,13 @@ static inline void *pool_alloc(pool_t *p)
 static const int sizeclasses[N_POOLS] = {
     8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48, 52, 56,
     64, 72, 80, 88, 96, //#=18
-    
+
     112, 128, 144, 160, 176, 192, 208, 224, 240, 256,
-                            
+
     288, 320, 352, 384, 416, 448, 480, 512,
-    
+
     640, 768, 896, 1024,
-    
+
     1536, 2048 };
 
 static int szclass(size_t sz)
@@ -1091,7 +1104,7 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
     prev_pfl = pfl;
     if (pg->gc_bits == GC_MARKED) {
         // skip
-        if (sweep_mask == GC_MARKED_NOESC && !pg->allocd) {
+        if (prev_sweep_mask == GC_MARKED_NOESC && sweep_mask == GC_MARKED_NOESC && !pg->allocd) {
             pg_skpd++;
             freedall = 0;
             if (pg->fl_begin_offset != (uint16_t)-1) {
@@ -1127,8 +1140,9 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
         }
         else {
             if (age >= PROMOTE_AGE) {
-                if (sweep_mask == GC_MARKED || bits == GC_MARKED_NOESC)
+                if (sweep_mask == GC_MARKED || bits == GC_MARKED_NOESC) {
                     gc_bits(v) = GC_QUEUED;
+                }
             }
             else if ((sweep_mask & bits) == sweep_mask) {
                 gc_bits(v) = GC_CLEAN;
@@ -1141,17 +1155,17 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
         }
         v = (gcval_t*)((char*)v + osize);
     }
-    
+
     pg->fl_begin_offset = pfl_begin ? (char*)pfl_begin - data : (uint16_t)-1;
     pg->fl_end_offset = pfl_begin ? (char*)pfl - data : (uint16_t)-1;
-    
+
     pg->nfree = pg_nfree;
     page_done++;
  free_page:
     if (sweep_mask == GC_MARKED)
         pg->nmarked = 0;
     pg_freedall += freedall;
-    
+
     // lazy version: (empty) if the whole page was already unused, free it
     // eager version: (freedall) free page as soon as possible
     // the eager one uses less memory.
@@ -1304,7 +1318,7 @@ static inline int gc_push_root(void *v, int d)
     assert((v) != NULL);
     verify_val(v);
     int bits = gc_bits(v);
-    if (!gc_marked(v)) {        
+    if (!gc_marked(v)) {
         return push_root((jl_value_t*)(v),d, bits);
     }
     return bits;
@@ -1314,7 +1328,7 @@ void jl_gc_setmark(jl_value_t *v) // TODO rename this as it is misleading now
 {
     //    int64_t s = perm_scanned_bytes;
     if (!gc_marked(v)) {
-        objprofile_count(jl_typeof(v), 1, 16);
+        //        objprofile_count(jl_typeof(v), 1, 16);
 #ifdef MEMDEBUG
         gc_setmark_big(v, GC_MARKED_NOESC);
 #else
@@ -1477,6 +1491,7 @@ static int push_root(jl_value_t *v, int d, int bits)
     }
     else if (((jl_datatype_t*)(vt))->name == jl_array_typename) {
         jl_array_t *a = (jl_array_t*)v;
+        int todo = !(bits & GC_MARKED);
         if (a->pooled)
             MARK(a,
 #ifdef MEMDEBUG
@@ -1484,7 +1499,7 @@ static int push_root(jl_value_t *v, int d, int bits)
 #else
                  bits = gc_setmark_pool(a, GC_MARKED_NOESC);
 #endif
-                 if (a->how == 2) {
+                 if (a->how == 2 && todo) {
                      objprofile_count(MATY, gc_bits(a) == GC_MARKED, array_nbytes(a));
                      if (gc_bits(a) == GC_MARKED)
                          perm_scanned_bytes += array_nbytes(a);
@@ -1494,7 +1509,7 @@ static int push_root(jl_value_t *v, int d, int bits)
         else
             MARK(a,
                  bits = gc_setmark_big(a, GC_MARKED_NOESC);
-                 if (a->how == 2) {
+                 if (a->how == 2 && todo) {
                      objprofile_count(MATY, gc_bits(a) == GC_MARKED, array_nbytes(a));
                      if (gc_bits(a) == GC_MARKED)
                          perm_scanned_bytes += array_nbytes(a);
@@ -1655,7 +1670,7 @@ static void pre_mark(void)
     gc_push_root(typeToTypeId, 0);
     if (jl_module_init_order != NULL)
         gc_push_root(jl_module_init_order, 0);
-    
+
     size_t i;
 
     // stuff randomly preserved
@@ -1713,7 +1728,7 @@ static void post_mark(void)
 static void gc_mark(int finalize)
 {
     // mark all roots
-    
+
     // active tasks
     gc_push_root(jl_root_task, 0);
     gc_push_root(jl_current_task, 0);
@@ -1791,7 +1806,7 @@ static void gc_mark(int finalize)
  barrier. Most times this allows you to take a guess. If this type of object is modified
  by C code directly, look for missing gc_wb() on pointer updates. Be aware that there are
  innocent looking functions which allocate (and thus trigger marking) only on special cases.
- 
+
  If you cant find it, you can try the following :
  - Ensure that should_timeout() is deterministic instead of clock based.
  - Once you have a completly deterministic program which crashes on gc_verify, the addresses
@@ -1822,7 +1837,7 @@ static void clear_mark(int bits)
     for(int i = 0; i < 4; i++)
         bits_save[i].len = 0;
     }
-    
+
     bigval_t *bigs[] = { big_objects, big_objects_marked };
     for (int i = 0; i < 2; i++) {
         bigval_t *v = bigs[i];
@@ -1944,7 +1959,7 @@ DLLEXPORT void jl_gc_enable(void)    { is_gc_enabled = 1; }
 DLLEXPORT void jl_gc_disable(void)   { is_gc_enabled = 0; }
 DLLEXPORT int jl_gc_is_enabled(void) { return is_gc_enabled; }
 
-DLLEXPORT int64_t jl_gc_total_bytes(void) { return total_allocd_bytes + allocd_bytes + collect_interval/gc_steps; }
+DLLEXPORT int64_t jl_gc_total_bytes(void) { return total_allocd_bytes + allocd_bytes + collect_interval; }
 DLLEXPORT uint64_t jl_gc_total_hrtime(void) { return total_gc_time; }
 DLLEXPORT int64_t jl_gc_num_pause(void) { return n_pause; }
 DLLEXPORT int64_t jl_gc_num_full_sweep(void) { return n_full_sweep; }
@@ -2015,6 +2030,8 @@ void prepare_sweep(void)
 #ifdef GC_VERIFY
 static void clear_mark(int);
 #endif
+
+
 void jl_gc_collect(void)
 {
     if (!is_gc_enabled) return;
@@ -2022,6 +2039,7 @@ void jl_gc_collect(void)
     jl_in_gc = 1;
     JL_SIGATOMIC_BEGIN();
     uint64_t t0 = jl_hrtime();
+    int recollect = 0;
 #if defined(GC_TIME) || defined(GC_FINAL_STATS)
     int wb_activations = mark_sp - saved_mark_sp;
 #endif
@@ -2029,50 +2047,58 @@ void jl_gc_collect(void)
 
         inc_count++;
         quick_count++;
-        
+
         scanned_bytes_goal = inc_count*(live_bytes/gc_inc_steps + mark_sp*sizeof(void*));
         scanned_bytes_goal = scanned_bytes_goal < MIN_SCAN_BYTES ? MIN_SCAN_BYTES : scanned_bytes_goal;
         if (gc_inc_steps > 1)
             check_timeout = 1;
         assert(mark_sp == 0);
-        
+
         // 1. mark every object in the remset
         reset_remset();
+        // avoid counting remembered objects & bindings twice in perm_scanned_bytes
         for(int i = 0; i < last_remset->len; i++) {
             uintptr_t item = (uintptr_t)last_remset->items[i];
             void* ptr = (void*)(item & ~(uintptr_t)1);
             objprofile_count(jl_typeof(ptr), 2, 0);
+            gc_bits(ptr) = GC_MARKED;
+        }
+        for (int i = 0; i < rem_bindings.len; i++) {
+            void *ptr = rem_bindings.items[i];
+            gc_bits(gc_val_buf(ptr)) = GC_MARKED;
+        }
+        for (int i = 0; i < last_remset->len; i++) {
+            uintptr_t item = (uintptr_t)last_remset->items[i];
+            void* ptr = (void*)(item & ~(uintptr_t)1);
+            push_root(ptr, 0, gc_bits(ptr));
             if (item & 1) {
                 // some objects are required to stay in the remset between quick collections
                 arraylist_push(remset, (void*)item);
             }
-            gc_bits(ptr) = GC_MARKED;
-            push_root(ptr, 0, gc_bits(ptr));
         }
-        
+
         // 2. mark every object in a remembered binding
         int n_bnd_refyoung = 0;
         for (int i = 0; i < rem_bindings.len; i++) {
             void *ptr = rem_bindings.items[i];
-            gc_bits(gc_val_buf(ptr)) = GC_MARKED;
             if (gc_push_root(((jl_binding_t*)ptr)->value, 0) == GC_MARKED_NOESC) {
                 rem_bindings.items[n_bnd_refyoung] = ptr;
                 n_bnd_refyoung++;
             }
         }
         rem_bindings.len = n_bnd_refyoung;
-        
+
         // 3. walk roots
         pre_mark();
         visit_mark_stack(GC_MARKED_NOESC);
-        
+
         /*if (mark_sp == 0 || inc_count > gc_inc_steps) { // mark current stack last to avoid temporaries
             visit_mark_stack(GC_MARKED_NOESC); // in case inc_count > inc_steps, we finish the marking in one go
-            
+
             mark_task_stacks(GC_MARKED_NOESC);
             visit_mark_stack(GC_MARKED_NOESC);
         }*/
-        allocd_bytes_since_sweep += allocd_bytes + (int64_t)collect_interval/gc_steps;
+        allocd_bytes_since_sweep += allocd_bytes + (int64_t)collect_interval;
 
 #if defined(GC_TIME) || defined(GC_FINAL_STATS)
         uint64_t mark_pause = jl_hrtime() - t0;
@@ -2085,9 +2111,10 @@ void jl_gc_collect(void)
         total_mark_time += mark_pause;
 #endif
     }
-#ifdef GC_TIME
+    //#ifdef GC_TIME
     int64_t bonus = -1, SAVE = -1, SAVE2 = -1, SAVE3 = -1, pct = -1, est_fb = -1;
-#endif
+    //#endif
+
 #if defined(GC_TIME) || defined(GC_FINAL_STATS)
     uint64_t post_time = 0, finalize_time = 0;
 #endif
@@ -2102,20 +2129,15 @@ void jl_gc_collect(void)
             post_time = jl_hrtime();
 #endif
             // 4. check for objects to finalize
-            post_mark(); 
+            post_mark();
 #ifdef GC_TIME
             post_time = jl_hrtime() - post_time;
 #endif
-            /* We should be able to know at this point how much memory we are going to 
-               free by running a sweep. This would allow us to make a better decision
-               about the next collection, instead of waiting another cycle.
-               However it has proven a bit annoying to get this number right given the many ways
-               of allocating memory (shared arrays, ...). TODO */
             est_fb = live_bytes - scanned_bytes - perm_scanned_bytes + actual_allocd;
-            //est_fb too large
+
 #ifdef GC_VERIFY
-            gc_verify_track();
-            //            gc_verify();
+            //gc_verify_track();
+            gc_verify();
 #endif
 
 #if defined(MEMPROFILE)
@@ -2127,16 +2149,21 @@ void jl_gc_collect(void)
             reset_obj_profile();
 #endif
             total_allocd_bytes += allocd_bytes_since_sweep;
-            
+
             // 5. next collection decision
-            if (1 || quick_count >= gc_quick_steps) {
-                sweep_mask = GC_MARKED; // next collection is a full one
-                gc_steps = 1;
-                quick_count = 0;
-            }
-            else {
-                sweep_mask = GC_MARKED_NOESC; // next collection is quick
-                gc_steps = 1;
+            if ((est_fb <= 1024 || est_fb < (7*(actual_allocd/10))) && n_pause > 1) {
+                if (prev_sweep_mask == GC_MARKED) {
+                    if (collect_interval <= 2*(max_collect_interval/5)) {
+                        collect_interval = 5*(collect_interval/2);
+                    }
+                    sweep_mask = GC_MARKED;
+                } else {
+                    sweep_mask = GC_MARKED;
+                    recollect = 1;
+                }
+            } else {
+                collect_interval = default_collect_interval;
+                sweep_mask = GC_MARKED_NOESC;
             }
             if (sweep_mask == GC_MARKED)
                 perm_scanned_bytes = 0;
@@ -2150,13 +2177,19 @@ void jl_gc_collect(void)
             // sweeping is over
             // 6. if it is a quick sweep, put back the remembered objects in queued state
             // so that we don't trigger the barrier again on them.
+            //jl_printf(JL_STDOUT, "SSB PSB %d %d\n", S_sb, S_psb);
             if (sweep_mask == GC_MARKED_NOESC) {
                 for (int i = 0; i < remset->len; i++) {
                     gc_bits(((uintptr_t)remset->items[i] & ~(uintptr_t)1)) = GC_QUEUED;
                 }
+                for (int i = 0; i < rem_bindings.len; i++) {
+                    void *ptr = rem_bindings.items[i];
+                    gc_bits(gc_val_buf(ptr)) = GC_QUEUED;
+                }
             }
             else {
                 remset->len = 0;
+                rem_bindings.len = 0;
                 n_full_sweep++;
             }
 
@@ -2165,44 +2198,20 @@ void jl_gc_collect(void)
             if (sweep_mask == GC_MARKED) {
                 tasks.len = 0;
             }
-#ifdef GC_TIME
             SAVE2 = freed_bytes;
+#ifdef GC_TIME
             SAVE3 = allocd_bytes_since_sweep;
             pct = actual_allocd ? (freed_bytes*100)/actual_allocd : -1;
 #endif
-            // 7. try to avoid doing unnescessary work and/or wasting too much memory
-            // as noted above this should really be decided _before_ sweeping.
-            // in any case this is still very ad hoc and could be improved a lot.
-            if (sweep_mask == GC_MARKED_NOESC) {
-                collect_interval = default_collect_interval;
-                if (freed_bytes >= actual_allocd) {
-                    quick_count--;
-                }
-                else {
-                    if (freed_bytes/quick_count < actual_allocd/gc_quick_steps) {
-                        quick_count = gc_quick_steps;
-                        collect_interval = default_collect_interval;
-                    }
-                }
-            }
-            else if (freed_bytes < (7*(actual_allocd/10)) && n_pause > 1) {
-                if (collect_interval <= 2*(max_collect_interval/5)) {
-                    collect_interval = 5*(collect_interval/2);
-                }
-                quick_count = gc_quick_steps;
-            }
-            else {
-                collect_interval = default_collect_interval;
-            }
             prev_sweep_mask = sweep_mask;
 
 
-            allocd_bytes = -(int64_t)collect_interval/gc_steps;
+            allocd_bytes = -(int64_t)collect_interval;
             inc_count = 0;
             live_bytes += -freed_bytes + allocd_bytes_since_sweep;
             allocd_bytes_since_sweep = 0;
             freed_bytes = 0;
-            
+
 #if defined(GC_FINAL_STATS) || defined(GC_TIME)
             finalize_time = jl_hrtime();
 #endif
@@ -2219,7 +2228,7 @@ void jl_gc_collect(void)
         total_fin_time += finalize_time + post_time;
 #endif
 #ifdef GC_TIME
-        JL_PRINTF(JL_STDOUT, "GC sweep pause %.2f ms live %ld kB (freed %d kB EST %d kB diff %d = %d%% of allocd %d kB b/r %ld/%ld) (%.2f ms in post_mark, %.2f ms in %d fin) (marked in %d inc) mask %d | next in %d kB\n", NS2MS(sweep_pause), live_bytes/1024, SAVE2, est_fb, (SAVE2 - est_fb), pct, SAVE3/1024, bonus/1024, SAVE/1024, NS2MS(post_time), NS2MS(finalize_time), n_finalized, inc_count, sweep_mask, -allocd_bytes/1024);
+        JL_PRINTF(JL_STDOUT, "GC sweep pause %.2f ms live %ld kB (freed %d kB EST %d kB [error %d] = %d%% of allocd %d kB b/r %ld/%ld) (%.2f ms in post_mark, %.2f ms in %d fin) (marked in %d inc) mask %d | next in %d kB\n", NS2MS(sweep_pause), live_bytes/1024, SAVE2/1024, est_fb/1024, (SAVE2 - est_fb), pct, SAVE3/1024, bonus/1024, SAVE/1024, NS2MS(post_time), NS2MS(finalize_time), n_finalized, inc_count, sweep_mask, -allocd_bytes/1024);
 #endif
     }
     n_pause++;
@@ -2230,7 +2239,12 @@ void jl_gc_collect(void)
 #endif
     JL_SIGATOMIC_END();
     jl_in_gc = 0;
-    if (est_fb != SAVE2) abort();
+    if (est_fb != SAVE2) {
+        // this should not happen but it does
+        // mostly because of gc_counted_* allocations
+    }
+    if (recollect)
+        jl_gc_collect();
 }
 
 #if 0
@@ -2264,7 +2278,7 @@ void jl_gc_collect(void)
         int nfinal = to_finalize.len;
         run_finalizers();
         jl_in_gc = 0;
-        
+
         JL_SIGATOMIC_END();
         total_gc_time += (jl_hrtime()-t0);
 #if defined(GC_FINAL_STATS)
@@ -2417,18 +2431,16 @@ void jl_gc_init(void)
 {
     const int* szc = sizeclasses;
     int i;
-    
+
     for(i=0; i < N_POOLS; i++) {
         assert(szc[i] % 4 == 0);
         norm_pools[i].osize = szc[i];
         norm_pools[i].freelist = NULL;
         norm_pools[i].end_offset = ((GC_PAGE_SZ/szc[i]) - 1)*szc[i];
     }
-    
+
     collect_interval = default_collect_interval;
     allocd_bytes = -default_collect_interval;
-
-    gc_steps = gc_inc_steps;
 
     htable_new(&finalizer_table, 0);
     arraylist_new(&to_finalize, 0);
@@ -2549,7 +2561,7 @@ static void big_obj_stats(void)
         }
         v = v->next;
     }
-    
+
     mallocarray_t *ma = mallocarrays;
     while (ma != NULL) {
         if (gc_marked(ma->a)) {

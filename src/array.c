@@ -551,7 +551,7 @@ static void array_resize_buffer(jl_array_t *a, size_t newlen, size_t oldlen, siz
     if (a->how == 2) {
         // already malloc'd - use realloc
         newdata = (char*)jl_gc_managed_realloc((char*)a->data - oldoffsnb, nbytes,
-                                               oldnbytes+oldoffsnb, a->isaligned);
+                                               oldnbytes+oldoffsnb, a->isaligned, a);
         if (offs != a->offset) {
             memmove(&newdata[offsnb], &newdata[oldoffsnb], oldnbytes);
         }

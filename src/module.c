@@ -17,8 +17,8 @@ jl_module_t *jl_current_module=NULL;
 jl_module_t *jl_new_module(jl_sym_t *name)
 {
     jl_module_t *m = (jl_module_t*)allocobj(sizeof(jl_module_t));
-    JL_GC_PUSH1(&m);
     m->type = (jl_value_t*)jl_module_type;
+    JL_GC_PUSH1(&m);
     assert(jl_is_symbol(name));
     m->name = name;
     m->constant_table = NULL;
@@ -366,8 +366,8 @@ DLLEXPORT void jl_checked_assignment(jl_binding_t *b, jl_value_t *rhs)
             JL_PRINTF(JL_STDERR,"Warning: redefining constant %s\n",b->name->name);
         }
     }
-    gc_wb_binding(((void**)b)-1, rhs);
     b->value = rhs;
+    gc_wb_binding(((void**)b)-1, rhs);
 }
 
 DLLEXPORT void jl_declare_constant(jl_binding_t *b)

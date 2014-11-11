@@ -245,6 +245,7 @@ jl_tuple_t *jl_compute_type_union(jl_tuple_t *types)
     size_t n = count_union_components(types);
     jl_value_t **temp;
     JL_GC_PUSHARGS(temp, n+1);
+    memset((char*)temp, 0, sizeof(void*)*(n+1));
     size_t idx=0;
     flatten_type_union(types, temp, &idx);
     assert(idx == n);

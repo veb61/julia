@@ -1086,7 +1086,7 @@ int jl_gc_n_preserved_values(void);
 DLLEXPORT void jl_gc_add_finalizer(jl_value_t *v, jl_function_t *f);
 DLLEXPORT jl_weakref_t *jl_gc_new_weakref(jl_value_t *value);
 void *jl_gc_managed_malloc(size_t sz);
-void *jl_gc_managed_realloc(void *d, size_t sz, size_t oldsz, int isaligned);
+void *jl_gc_managed_realloc(void *d, size_t sz, size_t oldsz, int isaligned, jl_value_t* owner);
 void jl_gc_free_array(jl_array_t *a);
 void jl_gc_track_malloced_array(jl_array_t *a);
 void jl_gc_count_allocd(size_t sz);
