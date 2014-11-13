@@ -1928,3 +1928,10 @@ type ConcreteThing{T<:FloatingPoint,N} <: AbstractThing{T,N}
 end
 
 @test typeintersect(AbstractThing{TypeVar(:T,true),2}, ConcreteThing) == ConcreteThing{TypeVar(:T,FloatingPoint),2}
+
+# Type inference for tuple parameters
+immutable fooTuple{s}; end
+barTuple1() = fooTuple{(:y,)}()
+barTuple2() = fooTuple{tuple(:y)}()
+
+@test Base.return_types(barTuple1,())[1] == Base.return_types(barTuple2,())[1] == fooTuple{(:y,)}
