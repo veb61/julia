@@ -1373,7 +1373,7 @@ static void emit_write_barrier(jl_codectx_t* ctx, Value *parent, Value *ptr)
     BasicBlock* barrier_may_trigger = BasicBlock::Create(getGlobalContext(), "wb_may_trigger", ctx->f);
     BasicBlock* barrier_trigger = BasicBlock::Create(getGlobalContext(), "wb_trigger", ctx->f);
     builder.CreateCondBr(parent_marked, barrier_may_trigger, cont);
-    
+
     builder.SetInsertPoint(barrier_may_trigger);
     Value* ptr_mark_bit = builder.CreateAnd(builder.CreateLoad(builder.CreateBitCast(ptr, T_psize)), 1);
     Value* ptr_not_marked = builder.CreateICmpEQ(ptr_mark_bit, ConstantInt::get(T_size, 0));
@@ -4511,7 +4511,7 @@ static void init_julia_llvm_env(Module *m)
                               Function::ExternalLinkage,
                               "gc_wb_slow", m);
     add_named_global(wbfunc, (void*)&gc_wb_slow);
-    
+
     std::vector<Type *> exp_args(0);
     exp_args.push_back(T_int1);
     expect_func = Intrinsic::getDeclaration(m, Intrinsic::expect, exp_args);
@@ -4632,13 +4632,13 @@ static void init_julia_llvm_env(Module *m)
                          Function::ExternalLinkage,
                          "alloc_3w", m);
     add_named_global(jlalloc3w_func, (void*)&alloc_3w);
-    
+
     jlalloc4w_func =
         Function::Create(FunctionType::get(jl_pvalue_llvmt, empty_args, false),
                          Function::ExternalLinkage,
                          "alloc_4w", m);
     add_named_global(jlalloc4w_func, (void*)&alloc_4w);
-    
+
     std::vector<Type*> atargs(0);
     atargs.push_back(T_size);
     jl_alloc_tuple_func =

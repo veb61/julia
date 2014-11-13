@@ -979,18 +979,18 @@ static inline  void *__pool_alloc(pool_t* p, int osize, int end_offset)
         jl_gc_collect();
         allocd_bytes += osize;
     }
-    
-    if (__unlikely(!p->freelist)) {
-        add_page(p);
-    }
     v = p->freelist;
+    if (__unlikely(!v)) {
+        add_page(p);
+        v = p->freelist;
+    }
+    end = (gcval_t*)&(GC_PAGE_DATA(v)[end_offset]);
     p->nfree--;
     p->allocd = 1;
-    end = (gcval_t*)&(GC_PAGE_DATA(v)[end_offset]);
-    if (__unlikely((v == end) | (!p->linear))) {
-        _update_freelist(p, v->next);
-    } else {
+    if (p->linear && v != end) {
         p->freelist = (gcval_t*)((char*)v + osize);
+    } else {
+        _update_freelist(p, v->next);
     }
     v->flags = 0;
     return v;
@@ -1020,7 +1020,7 @@ static const int sizeclasses[N_POOLS] = {
 
 static int szclass(size_t sz)
 {
-    #ifndef _P64
+#ifndef _P64
     if     (sz <=    8) return 0;
 #endif
     if     (sz <=   56) return ((sz+3)/4) - 2;
@@ -1102,29 +1102,29 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
     freedall = 1;
     old_nfree += pg->nfree;
     prev_pfl = pfl;
+    int pg_gc_bits = 0;
     if (pg->gc_bits == GC_MARKED) {
         // skip
         if (prev_sweep_mask == GC_MARKED_NOESC && sweep_mask == GC_MARKED_NOESC && !pg->allocd) {
-            pg_skpd++;
-            freedall = 0;
             if (pg->fl_begin_offset != (uint16_t)-1) {
                 *pfl = (gcval_t*)PAGE_PFL_BEG(pg);
                 pfl = prev_pfl = PAGE_PFL_END(pg);
             }
+            pg_skpd++;
+            freedall = 0;
+            pg_gc_bits = GC_MARKED;
             goto free_page;
         }
-        pg->allocd = 0;
     }
     else if(pg->gc_bits == GC_CLEAN) {
-        pg->allocd = 0;
         goto free_page;
     }
     if (sweep_mask == GC_MARKED)
         pg->nmarked = 0;
     int pg_nfree = 0;
     gcval_t **pfl_begin = NULL;
+    int obj_i = 0;
     while ((char*)v <= lim) {
-        int obj_i = ((uintptr_t)v - (uintptr_t)data)/8;
         // we can encouter a queued value at this point
         // if a write barrier was moved back between two
         // sweeping increments TODO
@@ -1136,23 +1136,27 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
             pfl = &v->next;
             pfl_begin = pfl_begin ? pfl_begin : pfl;
             pg_nfree++;
-            ages[obj_i/4] &= ~(3 << (obj_i % 4)*2);
+            age = 0;
         }
         else {
             if (age >= PROMOTE_AGE) {
                 if (sweep_mask == GC_MARKED || bits == GC_MARKED_NOESC) {
                     gc_bits(v) = GC_QUEUED;
+                } else {
+                    pg_gc_bits = GC_MARKED;
                 }
             }
             else if ((sweep_mask & bits) == sweep_mask) {
                 gc_bits(v) = GC_CLEAN;
+            } else {
+                pg_gc_bits = GC_MARKED;
             }
-
             inc_sat(age, PROMOTE_AGE);
-            ages[obj_i/4] &= ~(3 << sh);
-            ages[obj_i/4] |= age << sh;
             freedall = 0;
         }
+        ages[obj_i/4] &= ~(3 << sh);
+        ages[obj_i/4] |= age << sh;
+        obj_i++;
         v = (gcval_t*)((char*)v + osize);
     }
 
@@ -1161,6 +1165,7 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
 
     pg->nfree = pg_nfree;
     page_done++;
+    pg->allocd = 0;
  free_page:
     if (sweep_mask == GC_MARKED)
         pg->nmarked = 0;
@@ -1192,7 +1197,7 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
         nfree += obj_per_page;
     }
     else {
-        pg->gc_bits = GC_MARKED;
+        pg->gc_bits = pg_gc_bits;
         pg->linear = 0;
         nfree += pg->nfree;
     }
@@ -1831,7 +1836,6 @@ static void clear_mark(int bits)
 {
     size_t i;
     pool_t* pool;
-    gcpage_t* pg;
     gcval_t* pv;
     if (!verifying) {
     for(int i = 0; i < 4; i++)
@@ -2040,7 +2044,7 @@ void jl_gc_collect(void)
     JL_SIGATOMIC_BEGIN();
     uint64_t t0 = jl_hrtime();
     int recollect = 0;
-#if defined(GC_TIME) || defined(GC_FINAL_STATS)
+#if defined(GC_TIME)
     int wb_activations = mark_sp - saved_mark_sp;
 #endif
     if (!sweeping) {
@@ -2111,9 +2115,10 @@ void jl_gc_collect(void)
         total_mark_time += mark_pause;
 #endif
     }
-    //#ifdef GC_TIME
-    int64_t bonus = -1, SAVE = -1, SAVE2 = -1, SAVE3 = -1, pct = -1, est_fb = -1;
-    //#endif
+    #ifdef GC_TIME
+    int64_t bonus = -1, SAVE = -1, SAVE2 = -1, SAVE3 = -1, pct = -1;
+    #endif
+    int64_t estimate_freed = -1;
 
 #if defined(GC_TIME) || defined(GC_FINAL_STATS)
     uint64_t post_time = 0, finalize_time = 0;
@@ -2133,7 +2138,7 @@ void jl_gc_collect(void)
 #ifdef GC_TIME
             post_time = jl_hrtime() - post_time;
 #endif
-            est_fb = live_bytes - scanned_bytes - perm_scanned_bytes + actual_allocd;
+            estimate_freed = live_bytes - scanned_bytes - perm_scanned_bytes + actual_allocd;
 
 #ifdef GC_VERIFY
             //gc_verify_track();
@@ -2151,15 +2156,13 @@ void jl_gc_collect(void)
             total_allocd_bytes += allocd_bytes_since_sweep;
 
             // 5. next collection decision
-            if ((est_fb <= 1024 || est_fb < (7*(actual_allocd/10))) && n_pause > 1) {
-                if (prev_sweep_mask == GC_MARKED) {
-                    if (collect_interval <= 2*(max_collect_interval/5)) {
-                        collect_interval = 5*(collect_interval/2);
-                    }
-                    sweep_mask = GC_MARKED;
-                } else {
-                    sweep_mask = GC_MARKED;
-                    recollect = 1;
+            if ((estimate_freed <= 1024 || estimate_freed < (7*(actual_allocd/10))) && n_pause > 1) {
+                if (collect_interval <= 2*(max_collect_interval/5)) {
+                    collect_interval = 5*(collect_interval/2);
+                }
+                sweep_mask = GC_MARKED;
+                if (prev_sweep_mask != GC_MARKED) {
+                    //recollect = 1; // TODO enable this
                 }
             } else {
                 collect_interval = default_collect_interval;
@@ -2177,7 +2180,6 @@ void jl_gc_collect(void)
             // sweeping is over
             // 6. if it is a quick sweep, put back the remembered objects in queued state
             // so that we don't trigger the barrier again on them.
-            //jl_printf(JL_STDOUT, "SSB PSB %d %d\n", S_sb, S_psb);
             if (sweep_mask == GC_MARKED_NOESC) {
                 for (int i = 0; i < remset->len; i++) {
                     gc_bits(((uintptr_t)remset->items[i] & ~(uintptr_t)1)) = GC_QUEUED;
@@ -2198,8 +2200,8 @@ void jl_gc_collect(void)
             if (sweep_mask == GC_MARKED) {
                 tasks.len = 0;
             }
-            SAVE2 = freed_bytes;
 #ifdef GC_TIME
+            SAVE2 = freed_bytes;
             SAVE3 = allocd_bytes_since_sweep;
             pct = actual_allocd ? (freed_bytes*100)/actual_allocd : -1;
 #endif
@@ -2228,7 +2230,7 @@ void jl_gc_collect(void)
         total_fin_time += finalize_time + post_time;
 #endif
 #ifdef GC_TIME
-        JL_PRINTF(JL_STDOUT, "GC sweep pause %.2f ms live %ld kB (freed %d kB EST %d kB [error %d] = %d%% of allocd %d kB b/r %ld/%ld) (%.2f ms in post_mark, %.2f ms in %d fin) (marked in %d inc) mask %d | next in %d kB\n", NS2MS(sweep_pause), live_bytes/1024, SAVE2/1024, est_fb/1024, (SAVE2 - est_fb), pct, SAVE3/1024, bonus/1024, SAVE/1024, NS2MS(post_time), NS2MS(finalize_time), n_finalized, inc_count, sweep_mask, -allocd_bytes/1024);
+        JL_PRINTF(JL_STDOUT, "GC sweep pause %.2f ms live %ld kB (freed %d kB EST %d kB [error %d] = %d%% of allocd %d kB b/r %ld/%ld) (%.2f ms in post_mark, %.2f ms in %d fin) (marked in %d inc) mask %d | next in %d kB\n", NS2MS(sweep_pause), live_bytes/1024, SAVE2/1024, estimate_freed/1024, (SAVE2 - estimate_freed), pct, SAVE3/1024, bonus/1024, SAVE/1024, NS2MS(post_time), NS2MS(finalize_time), n_finalized, inc_count, sweep_mask, -allocd_bytes/1024);
 #endif
     }
     n_pause++;
@@ -2239,10 +2241,12 @@ void jl_gc_collect(void)
 #endif
     JL_SIGATOMIC_END();
     jl_in_gc = 0;
-    if (est_fb != SAVE2) {
+#ifdef GC_TIME
+    if (estimate_freed != SAVE2) {
         // this should not happen but it does
         // mostly because of gc_counted_* allocations
     }
+#endif
     if (recollect)
         jl_gc_collect();
 }
