@@ -98,27 +98,20 @@ typedef struct _gcval_t {
 } gcval_t;
 
 typedef struct _pool_t {
-    gcval_t *freelist ;
+    gcval_t *freelist;
+    gcval_t *newpages;
     uint16_t end_offset; // avoid to compute this at each allocation
     uint16_t osize;
     uint16_t nfree;
-    struct {
-        uint16_t allocd : 1;
-        uint16_t linear : 1;
-    };
 } pool_t;
 
 // pool page metadata
 typedef struct _gcpage_t {
     struct {
         uint16_t pool_n : 8;
-        uint16_t allocd : 1;
+        uint16_t allocd : 1; // true if an allocation happened in this page since last sweep
         // this is a bitwise | of all gc_bits in this page
         uint16_t gc_bits : 2;
-        // if this is 1, the freelist in this page contains only 2 cells.
-        // the first free cell and the last cell of the page
-        // every cell in between is free
-        uint16_t linear : 1;
     };
     uint16_t nfree;
     uint16_t nmarked;
@@ -486,7 +479,7 @@ static __attribute__((noinline)) void *malloc_page(void)
 
 static inline void free_page(void *p)
 {
-    size_t pg_idx = -1;
+    int pg_idx = -1;
     int i;
     for(i = 0; i < HEAP_COUNT && heaps[i] != NULL; i++) {
         pg_idx = ((char*)p - (char*)&heaps[i]->pages[0])/GC_PAGE_SZ;
@@ -929,34 +922,10 @@ static inline gcval_t *reset_page(pool_t *p, gcpage_t *pg, gcval_t *fl)
     gcval_t *beg = (gcval_t*)PAGE_DATA(pg);
     gcval_t *end = (gcval_t*)((char*)beg + (pg->nfree - 1)*p->osize);
     end->next = fl;
-    pg->linear = 1;
     pg->allocd = 0;
     pg->fl_begin_offset = 0;
     pg->fl_end_offset = (char*)end - (char*)beg;
     return beg;
-}
-
-// assign p->freelist = next
-// takes care of flushing the page metadata cache
-// if page(p->freelist) != page(next)
-static inline void _update_freelist(pool_t* p, gcval_t* next)
-{
-    gcval_t *cur = p->freelist;
-    p->freelist = next;
-    if (__likely(GC_PAGE_DATA(cur) == GC_PAGE_DATA(next))) return;
-    gcpage_t *cpg = cur ? GC_PAGE(cur) : NULL;
-    gcpage_t *npg = next ? GC_PAGE(next) : NULL;
-    if (npg == cpg) return;
-    if (cpg) {
-        cpg->linear = p->linear;
-        cpg->nfree = p->nfree;
-        cpg->allocd = p->allocd;
-    }
-    if (npg) {
-        p->linear = npg->linear;
-        p->nfree = npg->nfree;
-        p->allocd = npg->allocd;
-    }
 }
 
 static __attribute__((noinline)) void  add_page(pool_t *p)
@@ -967,30 +936,46 @@ static __attribute__((noinline)) void  add_page(pool_t *p)
     gcpage_t *pg = GC_PAGE(data);
     pg->data_offset = data - (char*)pg;
     pg->osize = p->osize;
-    gcval_t *fl = reset_page(p, pg, p->freelist);
-    _update_freelist(p, fl);
+    gcval_t *fl = reset_page(p, pg, p->newpages);
+    p->newpages = fl;
 }
 
 static inline  void *__pool_alloc(pool_t* p, int osize, int end_offset)
 {
     gcval_t *v, *end;
     if (__unlikely((allocd_bytes += osize) >= 0)) {
-        allocd_bytes -= osize;
+        //        allocd_bytes -= osize;
         jl_gc_collect();
-        allocd_bytes += osize;
+        //        allocd_bytes += osize;
     }
     v = p->freelist;
+    if (v) {
+        gcval_t* next = v->next;
+        v->flags = 0;
+        p->nfree--;
+        p->freelist = next;
+        if (__unlikely(GC_PAGE_DATA(v) != GC_PAGE_DATA(next))) {
+            gcpage_t* pg = GC_PAGE(v);
+            pg->nfree = 0;
+            pg->allocd = 1;
+            if (next)
+                p->nfree = GC_PAGE(next)->nfree;
+        }
+        return v;
+    }
+    v = p->newpages;
     if (__unlikely(!v)) {
         add_page(p);
-        v = p->freelist;
+        v = p->newpages;
     }
     end = (gcval_t*)&(GC_PAGE_DATA(v)[end_offset]);
-    p->nfree--;
-    p->allocd = 1;
-    if (p->linear && v != end) {
-        p->freelist = (gcval_t*)((char*)v + osize);
+    if (__likely(v != end)) {
+        p->newpages = (gcval_t*)((char*)v + osize);
     } else {
-        _update_freelist(p, v->next);
+        gcpage_t* pg = GC_PAGE(v);
+        pg->nfree = 0;
+        pg->allocd = 1;
+        p->newpages = v->next;
     }
     v->flags = 0;
     return v;
@@ -1044,14 +1029,27 @@ static int freed_pages = 0;
 static int lazy_freed_pages = 0;
 static int page_done = 0;
 static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl,int,int);
-static void _update_freelist(pool_t* p, gcval_t* next);
 static void sweep_pool_region(int heap_i, int sweep_mask)
 {
     region_t* heap = heaps[heap_i];
     gcval_t **pfl[N_POOLS];
     for (int i = 0; i < N_POOLS; i++) {
-        _update_freelist(&norm_pools[i], NULL);
+        gcval_t* last = norm_pools[i].freelist;
+        if (last) {
+            gcpage_t* pg = GC_PAGE(last);
+            pg->allocd = 1;
+            pg->nfree = norm_pools[i].nfree;
+        }
+        norm_pools[i].freelist =  NULL;
         pfl[i] = &norm_pools[i].freelist;
+
+        last = norm_pools[i].newpages;
+        if (last) {
+            gcpage_t* pg = GC_PAGE(last);
+            pg->nfree = (GC_PAGE_SZ - ((char*)last - GC_PAGE_DATA(last)))/norm_pools[i].osize;
+            pg->allocd = 1;
+        }
+        norm_pools[i].newpages = NULL;
     }
     int ub = 0;
     int lb = heaps_lb[heap_i];
@@ -1076,9 +1074,7 @@ static void sweep_pool_region(int heap_i, int sweep_mask)
     for (pool_t* p = norm_pools; p < norm_pools + N_POOLS; p++) {
         *pfl[i++] = NULL;
         if (p->freelist) {
-            gcval_t *begin = p->freelist;
-            p->freelist = NULL;
-            _update_freelist(p, begin);
+            p->nfree = GC_PAGE(p->freelist)->nfree;
         }
     }
 }
@@ -1179,9 +1175,13 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
         if (sweep_mask == GC_MARKED_NOESC && lazy_freed_pages <= default_collect_interval/(4*4096)) {
             gcval_t *begin = reset_page(p, pg, 0);
             *prev_pfl = begin;
-            pfl = (gcval_t**)((char*)begin + ((int)pg->nfree - 1)*osize);
+            gcval_t** pend = (gcval_t**)((char*)begin + ((int)pg->nfree - 1)*osize);
+            gcval_t* npg = p->newpages;
+            *pend = npg;
+            p->newpages = begin;
             begin->next = (gcval_t*)0;
             lazy_freed_pages++;
+            pfl = prev_pfl;
         }
         else {
             pfl = prev_pfl;
@@ -1198,7 +1198,6 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
     }
     else {
         pg->gc_bits = pg_gc_bits;
-        pg->linear = 0;
         nfree += pg->nfree;
     }
 
@@ -2071,6 +2070,7 @@ void jl_gc_collect(void)
             void *ptr = rem_bindings.items[i];
             gc_bits(gc_val_buf(ptr)) = GC_MARKED;
         }
+
         for (int i = 0; i < last_remset->len; i++) {
             uintptr_t item = (uintptr_t)last_remset->items[i];
             void* ptr = (void*)(item & ~(uintptr_t)1);
@@ -2440,6 +2440,7 @@ void jl_gc_init(void)
         assert(szc[i] % 4 == 0);
         norm_pools[i].osize = szc[i];
         norm_pools[i].freelist = NULL;
+        norm_pools[i].newpages = NULL;
         norm_pools[i].end_offset = ((GC_PAGE_SZ/szc[i]) - 1)*szc[i];
     }
 
