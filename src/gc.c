@@ -459,7 +459,16 @@ static __attribute__((noinline)) void *malloc_page(void)
         heaps_lb[heap_i] = i;
     if (heaps_ub[heap_i] < i)
         heaps_ub[heap_i] = i;
-    int j = (ffs(heap->freemap[i]) - 1);
+
+#ifdef __MINGW32__
+    int j = __builtin_ffs(heap->freemap[i]) - 1;
+#elif _MSC_VER
+    int j;
+    _BitScanForward(&j, heap->freemap[i]);
+#else
+    int j = ffs(heap->freemap[i]) - 1;
+#endif
+
     heap->freemap[i] &= ~(uint32_t)(1 << j);
     if (j == 0) { // reserve a page for metadata (every 31 data pages)
         j++;
