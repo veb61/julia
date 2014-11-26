@@ -1590,8 +1590,8 @@
 		  (block
 		   ;; NOTE: enable this to force loop-local var
 		   #;,@(map (lambda (v) `(local ,v)) (lhs-vars lhs))
-		   ,(lower-tuple-assignment (list lhs state)
-					    `(call (top next) ,coll ,state))
+		   (= ,lhs (call (top nextval) ,coll ,state))
+                   (= ,state (call (top nextstate) ,coll ,state))
 		   ,body))))))))
 
 (define (map-expand-forms e) (map expand-forms e))
@@ -2140,8 +2140,10 @@
 		   (scope-block
 		   (block
 		    (= ,(car is) (call (top +) ,(car is) 1))
-		    (= (tuple ,(cadr (car ranges)) ,(car states))
-		       (call (top next) ,(car rv) ,(car states)))
+		    (= ,(cadr (car ranges))
+                       (call (top nextval) ,(car rv) ,(car states)))
+		    (= ,(car states) ;; TBD: move to bottom of loop
+                       (call (top nextstate) ,(car rv) ,(car states)))
 		    ;; *** either this or force all for loop vars local
 		    ,.(map (lambda (r) `(local ,r))
 			   (lhs-vars (cadr (car ranges))))
