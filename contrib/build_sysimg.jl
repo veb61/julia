@@ -76,6 +76,21 @@ function build_sysimg(sysimg_path=default_sysimg_path, cpu_target="native", user
                 println("Linking sys.$(Sys.dlext)")
                 run(`$ld $FLAGS -o $sysimg_path.$(Sys.dlext) $sysimg_path.o`)
             end
+
+            println("System image successfully built at $sysimg_path.$(Sys.dlext)")
+            @windows_only begin
+                if convert(VersionNumber, Base.libllvm_version) < v"3.5.0"
+                    LLVM_msg = "Building sys.dll on Windows against LLVM < 3.5.0 can cause incorrect backtraces!"
+                    LLVM_msg *= " Delete generated sys.dll to avoid these problems"
+                    warn( LLVM_msg )
+                end
+            end
+
+            if default_sysimg_path != sysimg_path
+                println("To run Julia with this image loaded, run: julia -J $sysimg_path.ji")
+            else
+                println("Julia will automatically load this system image at next startup")
+            end
         finally
             # Cleanup userimg.jl
             if isfile("userimg.jl")
@@ -83,8 +98,6 @@ function build_sysimg(sysimg_path=default_sysimg_path, cpu_target="native", user
             end
         end
     end
-
-    println("System image built; run julia -J $sysimg_path.ji")
 end
 
 # Search for a linker to link sys.o into sys.dl_ext.  Honor LD environment variable.
@@ -98,9 +111,11 @@ function find_system_linker()
 
     # On Windows, check to see if WinRPM is installed, and if so, see if binutils is installed
     @windows_only try
-        # Silently fail on windows if LLVM < 3.5
+        # Warn about LLVM < 3.5.0
         if convert(VersionNumber, Base.libllvm_version) < v"3.5.0"
-            return nothing
+            LLVM_msg = "Building sys.dll on Windows against LLVM < 3.5.0 can cause incorrect backtraces!"
+            LLVM_msg *= " Delete generated sys.dll to avoid these problems"
+            warn( LLVM_msg )
         end
 
         using WinRPM
@@ -110,7 +125,9 @@ function find_system_linker()
             throw()
         end
     catch
-        warn("binutils package not installed!  Install via WinRPM.install(\"binutils\") for faster sysimg load times" )
+        if convert(VersionNumber, Base.libllvm_version) >= v"3.5.0"
+            warn("Install Binutils via WinRPM.install(\"binutils\") to generate sys.dll for faster startup times" )
+        end
     end
 
 
@@ -121,18 +138,19 @@ function find_system_linker()
         end
     end
 
-    warn( "No supported linker found; sysimg load times will be longer!" )
+    warn( "No supported linker found; startup times will be longer" )
 end
 
 # When running this file as a script, try to do so with default values.  If arguments are passed
 # in, use them as the arguments to build_sysimg above
 if !isinteractive()
-    if length(ARGS) > 4
-        println("Usage: build_sysimg.jl <sysimg_path> <cpu_target> <usrimg_path.jl> --force")
+    if length(ARGS) > 4 || ("--help" in ARGS || "-h" in ARGS)
+        println("Usage: build_sysimg.jl <sysimg_path> <cpu_target> <usrimg_path.jl> [--force] [--help]")
         println("   <sysimg_path>    is an absolute, extensionless path to store the system image at")
         println("   <cpu_target>     is an LLVM cpu target to build the system image against")
         println("   <usrimg_path.lj> is the path to a user image to be baked into the system image")
         println("   --force          Set if you wish to overwrite the default system image")
+        println("   --help           Print out this help text and exit")
         println()
         println(" Example:")
         println("   build_sysimg.jl /usr/local/lib/julia/sys core2 ~/my_usrimg.jl true")
