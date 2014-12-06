@@ -5,6 +5,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <stdio.h>
 #include <setjmp.h>
 #include <assert.h>
 #include <sys/types.h>
@@ -83,11 +84,14 @@ void jl_module_load_time_initialize(jl_module_t *m)
     }
 }
 
+void jl_compile_all(void);
+
 extern void jl_get_system_hooks(void);
 jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
 {
     static arraylist_t module_stack;
     static int initialized=0;
+    int isbase = 0;
     if (!initialized) {
         arraylist_new(&module_stack, 0);
         initialized = 1;
@@ -106,12 +110,14 @@ jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
     jl_binding_t *b = jl_get_binding_wr(parent_module, name);
     jl_declare_constant(b);
     if (b->value != NULL) {
+        jl_main_module->uuid = 0;
         JL_PRINTF(JL_STDERR, "Warning: replacing module %s\n", name->name);
     }
     jl_module_t *newm = jl_new_module(name);
     newm->parent = parent_module;
     b->value = (jl_value_t*)newm;
     if (parent_module == jl_main_module && name == jl_symbol("Base")) {
+        isbase = 1;
         // pick up Base module during bootstrap
         jl_old_base_module = jl_base_module;
         jl_base_module = newm;
@@ -156,6 +162,49 @@ jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
     jl_current_module = last_module;
     jl_current_task->current_module = task_last_m;
 
+    arraylist_push(&module_stack, newm);
+
+    if (jl_current_module == jl_main_module) {
+        while (module_stack.len > 0) {
+            jl_module_load_time_initialize((jl_module_t *) arraylist_pop(&module_stack));
+        }
+
+        char *build_path = jl_compileropts.build_path;
+        if (build_path) {
+            if (jl_compileropts.compile_enabled == JL_COMPILEROPT_COMPILE_ALL)
+                jl_compile_all();
+            char *build_ji;
+            if (asprintf(&build_ji, "%s" PATHSEPSTRING "%s.ji",build_path,newm->name->name) > 0) {
+                if (isbase)
+                    jl_save_system_image(build_ji);
+                else
+                    jl_save_new_module(build_ji, newm);
+                free(build_ji);
+                if (jl_compileropts.dumpbitcode == JL_COMPILEROPT_DUMPBITCODE_ON) {
+                    char *build_bc;
+                    if (asprintf(&build_bc, "%s" PATHSEPSTRING "%s.bc",build_path,newm->name->name) > 0) {
+                        jl_dump_bitcode(build_bc);
+                        free(build_bc);
+                    }
+                    else {
+                        ios_printf(ios_stderr,"\nWARNING: failed to create string for .bc build path\n");
+                    }
+                }
+                char *build_o;
+                if (asprintf(&build_o, "%s" PATHSEPSTRING "%s.o",build_path,newm->name->name) > 0) {
+                    jl_dump_objfile(build_o,0);
+                    free(build_o);
+                }
+                else {
+                    ios_printf(ios_stderr,"\nFATAL: failed to create string for .o build path\n");
+                }
+            }
+            else {
+                ios_printf(ios_stderr,"\nFATAL: failed to create string for .ji build path\n");
+            }
+        }
+    }
+
 #if 0
     // some optional post-processing steps
     size_t i;
@@ -175,14 +224,6 @@ jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
         }
     }
 #endif
-
-    arraylist_push(&module_stack, newm);
-
-    if (jl_current_module == jl_main_module) {
-        while (module_stack.len > 0) {
-            jl_module_load_time_initialize((jl_module_t *) arraylist_pop(&module_stack));
-        }
-    }
 
     return jl_nothing;
 }

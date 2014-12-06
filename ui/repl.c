@@ -87,7 +87,7 @@ static const char *opts =
     " --check-bounds={yes|no}  Emit bounds checks always or never (ignoring declarations)\n"
     " -O, --optimize           Run time-intensive code optimizations\n"
     " --int-literals={32|64}   Select integer literal size independent of platform\n"
-    " --dump-bitcode={yes|no}  Dump bitcode for the system image (used with --build)\n";
+    " --dump-bitcode={yes|no}  Dump bitcode for the cache image (used with --build)\n";
 
 void parse_opts(int *argcp, char ***argvp)
 {
