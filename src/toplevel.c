@@ -169,7 +169,7 @@ jl_value_t *jl_eval_module_expr(jl_expr_t *ex)
             jl_module_load_time_initialize((jl_module_t *) arraylist_pop(&module_stack));
         }
 
-        char *build_path = jl_compileropts.build_path;
+        const char *build_path = jl_compileropts.build_path;
         if (build_path) {
             if (jl_compileropts.compile_enabled == JL_COMPILEROPT_COMPILE_ALL)
                 jl_compile_all();
