@@ -376,13 +376,17 @@ void jl_dump_function_asm(const char *Fptr, size_t Fsize,
             // MCIA->evaluateBranch. (It should be possible to rewrite
             // this routine to handle this case correctly as well.)
             // Could add OpInfoLookup here
-#ifdef LLVM35
+#ifdef defined(LLVM35)
             DisAsm->setSymbolizer(std::unique_ptr<MCSymbolizer>(new MCExternalSymbolizer(
                         Ctx,
                         std::unique_ptr<MCRelocationInfo>(new MCRelocationInfo(Ctx)),
                         OpInfoLookup,
                         SymbolLookup,
                         &DisInfo)));
+#elif defined(LLVM34)
+            OwningPtr<MCRelocationInfo> MCRI(new MCRelocationInfo(Ctx));
+            DisAsm->setupForSymbolicDisassembly(
+                    OpInfoLookup, SymbolLookup, &DisInfo, &Ctx, MCRI);     
 #else
             DisAsm->setupForSymbolicDisassembly(
                     OpInfoLookup, SymbolLookup, &DisInfo, &Ctx);
