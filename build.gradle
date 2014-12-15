@@ -1,0 +1,44 @@
+import com.rragraphics.hjc.*
+/*Working*/
+def targetDir = System.getenv("HJC_JULIA")
+
+/***************************************************************************************
+*
+* 	BUILD TASKS SPECIFIC TO THIS PROJECT
+*
+***************************************************************************************/
+task CheckOutBranch{
+	description 'Checks out the requested branch for julia'
+	def props = project.getProperties()
+	getGitBranch(targetDir,props['gitbranch'])
+}
+/*making it executable only if the gitbranch is defined!*/
+CheckOutBranch.onlyIf{project.hasProperty('gitbranch')}
+
+
+task MakeJulia(type:GnuMakeBuild){
+	description 'actually builds the julia'
+	jobs 		= 17
+	workingDir 	= targetDir
+	outputs.dir workingDir
+}
+/***************************************************************************************
+*
+*  BUILD RELATED TASKS
+*
+***************************************************************************************/
+PreConfigWorld 	<< {
+}
+
+BuildWorld 		<< {
+}
+
+PostConfigWorld << {
+}
+
+CleanWorld 		<< {
+}
+
+/*Task Dependencies*/
+PreConfigWorld.dependsOn CheckOutBranch
+BuildWorld.dependsOn MakeJulia
