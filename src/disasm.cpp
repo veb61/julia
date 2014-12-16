@@ -376,7 +376,7 @@ void jl_dump_function_asm(const char *Fptr, size_t Fsize,
             // MCIA->evaluateBranch. (It should be possible to rewrite
             // this routine to handle this case correctly as well.)
             // Could add OpInfoLookup here
-#ifdef defined(LLVM35)
+#if defined(LLVM35)
             DisAsm->setSymbolizer(std::unique_ptr<MCSymbolizer>(new MCExternalSymbolizer(
                         Ctx,
                         std::unique_ptr<MCRelocationInfo>(new MCRelocationInfo(Ctx)),
@@ -483,7 +483,7 @@ void jl_dump_function_asm(const char *Fptr, size_t Fsize,
                     // Pass 0: Record all branch targets
                     if (MCIA->isBranch(Inst)) {
                         uint64_t addr;
-#ifdef LLVM35
+#if defined(LLVM35) || defined(LLVM34)
                         if (MCIA->evaluateBranch(Inst, Index, insSize, addr))
 #else
                         if ((addr = MCIA->evaluateBranch(Inst, Index, insSize)) != -1)

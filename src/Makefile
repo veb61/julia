@@ -17,6 +17,7 @@ HEADERS = julia.h julia_internal.h options.h $(wildcard support/*.h) $(LIBUV_INC
 FLAGS = \
 	-D_GNU_SOURCE -Iflisp -Isupport \
 	-I$(call exec,$(LLVM_CONFIG) --includedir) \
+	-I$(call exec,$(LLVM_CONFIG) --obj-root)/include \
 	-I$(LIBUV_INC) -I$(build_includedir) -DLIBRARY_EXPORTS \
 	-I$(BUILDDIR)
 ifneq ($(USEMSVC), 1)

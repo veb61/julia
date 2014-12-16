@@ -6,6 +6,7 @@ override CXXFLAGS += $(JCXXFLAGS)
 override CPPFLAGS += $(JCPPFLAGS)
 
 BUILDDIR ?= .
+BUILDDIR = $(BUILDER)/flisp
 
 NAME = flisp
 EXENAME = $(NAME)
@@ -46,7 +47,7 @@ release: $(BUILDDIR)/$(EXENAME)
 debug: $(BUILDDIR)/$(EXENAME)-debug
 
 $(BUILDDIR):
-	mkdir $(BUILDDIR)
+	mkdir -p $(BUILDDIR)
 
 $(BUILDDIR)/%.o: %.c $(HEADERS) | $(BUILDDIR)
 	@$(call PRINT_CC, $(CC) $(CPPFLAGS) $(SHIPFLAGS) -DNDEBUG -c $< -o $@)
@@ -77,13 +78,13 @@ CCLD = $(LD)
 endif
 
 $(BUILDDIR)/$(EXENAME)-debug: $(DOBJS) $(LIBFILES) $(BUILDDIR)/$(LIBTARGET)-debug.a $(BUILDDIR)/flmain.dbg.obj
-	@$(call PRINT_LINK, $(CCLD) $(DEBUGFLAGS) $(DOBJS) $(BUILDDIR)/flmain.dbg.obj -o $@ $(BUILDDIR)/$(LIBTARGET).a $(LIBS) $(OSLIBS))
+	@$(call PRINT_LINK, $(CCLD) $(DEBUGFLAGS) $(DOBJS) $(BUILDDIR)/flmain.dbg.obj -o $@ $(BUILDDIR)/$(LIBTARGET)-debug.a $(LIBS) $(OSLIBS))
 
-$(BUILDDIR)/$(EXENAME): $(OBJS) $(LIBFILES) $(BUILDDIR)/$(LIBTARGET).a $(BUILDDIR)/flmain.o | $(BUILDDIR)/flisp.boot
+$(BUILDDIR)/$(EXENAME): $(BUILDDIR)/flisp.boot | $(OBJS) $(LIBFILES) $(BUILDDIR)/$(LIBTARGET).a $(BUILDDIR)/flmain.o 
 	@$(call PRINT_LINK, $(CCLD) $(SHIPFLAGS) $(OBJS) $(BUILDDIR)/flmain.o -o $@ $(BUILDDIR)/$(LIBTARGET).a $(LIBS) $(OSLIBS))
 
 $(BUILDDIR)/flisp.boot: flisp.boot
-	cp $< $@
+	cp -r $< $@
 
 test:
 ifneq ($(USEMSVC), 1)

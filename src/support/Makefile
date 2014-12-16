@@ -6,6 +6,8 @@ override CXXFLAGS += $(JCXXFLAGS)
 override CPPFLAGS += $(JCPPFLAGS)
 
 BUILDDIR ?= .
+BUILDDIR = $(BUILDDIR)/support
+
 
 SRCS = hashing timefuncs ptrhash operators \
 	utf8 ios htable bitvector \
@@ -37,7 +39,7 @@ SHIPFLAGS += $(FLAGS)
 default: release
 
 $(BUILDDIR):
-	mkdir $(BUILDDIR)
+	mkdir -p $(BUILDDIR)
 
 $(BUILDDIR)/%.o: %.c $(HEADERS) | $(BUILDDIR)
 	@$(call PRINT_CC, $(CC) $(CPPFLAGS) $(SHIPFLAGS) -DNDEBUG -c $< -o $@)

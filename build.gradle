@@ -1,7 +1,7 @@
 import com.rragraphics.hjc.*
-/*Working*/
-def targetDir = System.getenv("HJC_JULIA")
 
+/*Target Directory*/
+def targetDir
 /***************************************************************************************
 *
 * 	BUILD TASKS SPECIFIC TO THIS PROJECT
@@ -16,11 +16,61 @@ task CheckOutBranch{
 CheckOutBranch.onlyIf{project.hasProperty('gitbranch')}
 
 
-task MakeJulia(type:GnuMakeBuild){
+task MakeJulia(type:GnuMakeBuild,dependsOn:':llvm:BuildWorld'){
 	description 'actually builds the julia'
+	/*FLAGS*/
+	flags["USE_SYSTEM_LLVM"] 		= 1
+	flags["USE_SYSTEM_LIBUNWIND"] 	= 1
+	flags["USE_SYSTEM_PCRE"]		= 1
+	flags["USE_SYSTEM_LIBM"]		= 1
+	flags["USE_SYSTEM_OPENLIBM"]	= 1
+	flags["UNTRUSTED_SYSTEM_LIBM"]	= 0
+	flags["USE_SYSTEM_OPENSPECFUN"] = 1
+	flags["USE_SYSTEM_DSFMT"]		= 1
+	flags["USE_SYSTEM_BLAS"]		= 1
+	flags["USE_SYSTEM_LAPACK"]		= 1
+	flags["USE_SYSTEM_FFTW"]		= 1
+	flags["USE_SYSTEM_GMP"]			= 1
+	flags["USE_SYSTEM_MPFR"]		= 1
+	flags["USE_SYSTEM_ARPACK"]		= 1
+	flags["USE_SYSTEM_SUITESPARSE"]	= 1
+	flags["USE_SYSTEM_RMATH"]		= 0
+	flags["USE_SYSTEM_LIBUV"]		= 0
+	flags["USE_SYSTEM_UTF8PROC"]	= 1
+	flags["USE_SYSTEM_MOJIBAKE"]	= 0
+	flags["USE_SYSTEM_LIBGIT2"]		= 1
+	flags["VERBOSE"]				= 1
+
+
+	switch(buildtype)
+	{
+		case "RELEASE":
+			flags["JULIA_DEBUG"] 	= 0
+			targetDir 				= System.getenv("HJC_BUILD") + "/julia_release"
+			break;
+		case "DEBUG":
+			flags["JULIA_DEBUG"] 	= 1
+			targetDir 				= System.getenv("HJC_BUILD") + "/julia_debug"
+			break;
+		default:
+			throw new Exception("There is no build configuration named : $buildtype");
+			break;
+	}
+	flags["BUILDDIR"]		= targetDir + "/objs"
+	flags["build_prefix"]	= targetDir
+
 	jobs 		= 17
-	workingDir 	= targetDir
+	workingDir 	= System.getenv("HJC_JULIA")
 	outputs.dir workingDir
+}
+
+task CreateJuliaSymLinks{
+	description 'creates the symbolic link for the system variable "JULIA_BUILD"'
+	String bld_dir 		= System.getenv("HJC_BUILD")
+	String julia_dir	= System.getenv("JULIA_BUILD")
+	deleteDir(julia_dir)
+	String cmd = "cd " + bld_dir + " && " + "ln -sf ${targetDir}/  julia"
+	executecmd(cmd)
 }
 /***************************************************************************************
 *
@@ -42,3 +92,4 @@ CleanWorld 		<< {
 /*Task Dependencies*/
 PreConfigWorld.dependsOn CheckOutBranch
 BuildWorld.dependsOn MakeJulia
+PostConfigWorld.dependsOn CreateJuliaSymLinks
