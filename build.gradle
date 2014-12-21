@@ -1,7 +1,17 @@
 import com.rragraphics.hjc.*
 
-/*Target Directory*/
-def targetDir
+/*last configuration*/
+def lastConfig 	  = [:]
+
+
+/***************************************************************************************
+*
+* SOME AUXILARY FUNCTIONS
+*
+****************************************************************************************/
+
+def BUILD_DIR = BUILD_ROOT_PATH + "/julia_${BUILDVERSION}"
+
 /***************************************************************************************
 *
 * 	BUILD TASKS SPECIFIC TO THIS PROJECT
@@ -10,10 +20,10 @@ def targetDir
 task CheckOutBranch{
 	description 'Checks out the requested branch for julia'
 	def props = project.getProperties()
-	getGitBranch(targetDir,props['gitbranch'])
+	getGitBranch(JULIA_SRC_PATH,props['GITBRANCH'])
 }
 /*making it executable only if the gitbranch is defined!*/
-CheckOutBranch.onlyIf{project.hasProperty('gitbranch')}
+CheckOutBranch.onlyIf{project.hasProperty('GITBRANCH')}
 
 
 task MakeJulia(type:GnuMakeBuild,dependsOn:':llvm:BuildWorld'){
@@ -42,35 +52,38 @@ task MakeJulia(type:GnuMakeBuild,dependsOn:':llvm:BuildWorld'){
 	flags["VERBOSE"]				= 1
 
 
-	switch(buildtype)
+	switch(BUILDVERSION)
 	{
 		case "RELEASE":
 			flags["JULIA_DEBUG"] 	= 0
-			targetDir 				= System.getenv("HJC_BUILD") + "/julia_release"
 			break;
 		case "DEBUG":
 			flags["JULIA_DEBUG"] 	= 1
-			targetDir 				= System.getenv("HJC_BUILD") + "/julia_debug"
 			break;
 		default:
-			throw new Exception("There is no build configuration named : $buildtype");
+			throw new Exception("There is no build configuration named : $BUILDVERSION");
 			break;
 	}
-	flags["BUILDDIR"]		= targetDir + "/objs"
-	flags["build_prefix"]	= targetDir
-
+	flags["BUILDDIR"]		= BUILD_DIR + "/objs"
+	flags["build_prefix"]	= BUILD_DIR
 	jobs 		= 17
-	workingDir 	= System.getenv("HJC_JULIA")
-	outputs.dir workingDir
+	workingDir 	= JULIA_SRC_PATH
+	lastConfig = flags.clone()
 }
 
 task CreateJuliaSymLinks{
 	description 'creates the symbolic link for the system variable "JULIA_BUILD"'
-	String bld_dir 		= System.getenv("HJC_BUILD")
-	String julia_dir	= System.getenv("JULIA_BUILD")
-	deleteDir(julia_dir)
-	String cmd = "cd " + bld_dir + " && " + "ln -sf ${targetDir}/  julia"
+	new File(JULIA_BUILD_PATH).delete()
+	def cmd = "cd " + BUILD_ROOT_PATH + " && " + "ln -sf ${BUILD_DIR}/  julia"
 	executecmd(cmd)
+}
+
+task CleanJulia(type:GnuMakeBuild){
+	description 'total cleaning of julia build'
+	flags = lastConfig
+	jobs 		= 17
+	workingDir 	= JULIA_SRC_PATH
+	targets = ['distcleanall']
 }
 /***************************************************************************************
 *
@@ -87,9 +100,11 @@ PostConfigWorld << {
 }
 
 CleanWorld 		<< {
+	new File(JULIA_BUILD_PATH).delete()
 }
 
 /*Task Dependencies*/
 PreConfigWorld.dependsOn CheckOutBranch
 BuildWorld.dependsOn MakeJulia
 PostConfigWorld.dependsOn CreateJuliaSymLinks
+CleanWorld.dependsOn CleanJulia
