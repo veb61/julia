@@ -1,19 +1,23 @@
-include("sparse/abstractsparse.jl")
-
 module SparseMatrix
 
+using Base: NonTupleType
+using Base.Sort: Forward
+using Base.LinAlg: AbstractTriangular
+
 importall Base
-import Base.NonTupleType, Base.float, Base.Order, Base.Sort.Forward
-import Base.transpose!, Base.ctranspose!
+importall Base.LinAlg
 
 export SparseMatrixCSC,
-       blkdiag, dense, diag, diagm, droptol!, dropzeros!, etree, full,
-       getindex, ishermitian, issparse, issym, istril, istriu, nnz,
-       setindex!, sparse, sparsevec, spdiagm, speye, spones,
-       sprand, sprandbool, sprandn, spzeros, symperm, trace, tril, tril!,
-       triu, triu!, nonzeros, rowvals, nzrange
+       blkdiag, dense, droptol!, dropzeros!, etree, issparse, nnz, nonzeros, nzrange,
+       rowvals, sparse, sparsevec, spdiagm, speye, spones, sprand, sprandbool, sprandn,
+       spzeros, symperm
 
+include("sparse/abstractsparse.jl")
 include("sparse/sparsematrix.jl")
 include("sparse/csparse.jl")
+
+include("sparse/linalg.jl")
+include("sparse/umfpack.jl")
+include("sparse/cholmod.jl")
 
 end # module SparseMatrix

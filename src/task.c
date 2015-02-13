@@ -7,7 +7,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
-//#include <sys/mman.h>
 #include <signal.h>
 #include <errno.h>
 #include "julia.h"
@@ -39,16 +38,16 @@ static int _stack_grows_up;
 static size_t _frame_offset;
 
 struct _probe_data {
-    intptr_t low_bound;		/* below probe on stack */
-    intptr_t probe_local;	/* local to probe on stack */
-    intptr_t high_bound;	/* above probe on stack */
-    intptr_t prior_local;	/* value of probe_local from earlier call */
+    intptr_t low_bound;         /* below probe on stack */
+    intptr_t probe_local;       /* local to probe on stack */
+    intptr_t high_bound;        /* above probe on stack */
+    intptr_t prior_local;       /* value of probe_local from earlier call */
 
-    jl_jmp_buf probe_env;	/* saved environment of probe */
-    jl_jmp_buf probe_sameAR;	/* second environment saved by same call */
-    jl_jmp_buf probe_samePC;	/* environment saved on previous call */
+    jl_jmp_buf probe_env;       /* saved environment of probe */
+    jl_jmp_buf probe_sameAR;    /* second environment saved by same call */
+    jl_jmp_buf probe_samePC;    /* environment saved on previous call */
 
-    jl_jmp_buf * ref_probe;	/* switches between probes */
+    jl_jmp_buf * ref_probe;     /* switches between probes */
 };
 
 static void boundhigh(struct _probe_data *p)
@@ -74,11 +73,7 @@ static void boundlow(struct _probe_data *p)
 }
 
 // we need this function to exist so we can measure its stack frame!
-#if defined(_OS_WINDOWS_) && !defined(_COMPILER_MINGW_)
-static void __declspec(noinline) fill(struct _probe_data *p);
-#else
-static void fill(struct _probe_data *p) __attribute__ ((noinline));
-#endif
+static void NOINLINE_DECL(fill(struct _probe_data *p));
 
 static void fill(struct _probe_data *p)
 {
@@ -154,18 +149,24 @@ jl_value_t *jl_exception_in_transit;
 jl_gcframe_t *jl_pgcstack = NULL;
 #endif
 
-static void start_task(jl_task_t *t);
-
 #ifdef COPY_STACKS
-jl_jmp_buf * volatile jl_jmp_target;
-DLLEXPORT jl_jmp_buf jl_base_ctx;
+static jl_jmp_buf * volatile jl_jmp_target;
 
-static void save_stack(jl_task_t *t)
+#if defined(_CPU_X86_64_) || defined(_CPU_X86_)
+#define ASM_COPY_STACKS
+#endif
+void *jl_stackbase;
+
+#ifndef ASM_COPY_STACKS
+static jl_jmp_buf jl_base_ctx; // base context of stack
+#endif
+
+static void NOINLINE save_stack(jl_task_t *t)
 {
     if (t->state == done_sym || t->state == failed_sym)
         return;
-    volatile int _x;
-    size_t nb = (char*)t->stackbase - (char*)&_x;
+    volatile char *_x;
+    size_t nb = (char*)jl_stackbase - (char*)&_x;
     char *buf;
     if (t->stkbuf == NULL || t->bufsz < nb) {
         buf = (char*)allocb(nb);
@@ -177,28 +178,101 @@ static void save_stack(jl_task_t *t)
     }
     t->ssize = nb;
     memcpy(buf, (char*)&_x, nb);
+    // this task's stack could have been modified after
+    // it was marked by an incremental collection
+    // move the barrier back instead of walking it again here
+    gc_wb_back(t);
 }
 
-#if defined(_OS_WINDOWS_) && !defined(_COMPILER_MINGW_)
-void __declspec(noinline) restore_stack(jl_task_t *t, jl_jmp_buf *where, char *p)
-#else
-void __attribute__((noinline)) restore_stack(jl_task_t *t, jl_jmp_buf *where, char *p)
-#endif
+void NOINLINE restore_stack(jl_task_t *t, jl_jmp_buf *where, char *p)
 {
-    char *_x = (char*)t->stackbase - t->ssize;
+    char *_x = (char*)jl_stackbase - t->ssize;
     if (!p) {
         p = _x;
         if ((char*)&_x > _x) {
             p = (char*)alloca((char*)&_x - _x);
-    	}
+        }
         restore_stack(t, where, p);
     }
     jl_jmp_target = where;
-
-    if (t->stkbuf != NULL) {
-        memcpy(_x, t->stkbuf, t->ssize);
-    }
+    assert(t->stkbuf != NULL);
+    memcpy(_x, t->stkbuf, t->ssize);
     jl_longjmp(*jl_jmp_target, 1);
+}
+#endif
+
+static jl_function_t *task_done_hook_func=NULL;
+
+static void NORETURN finish_task(jl_task_t *t, jl_value_t *resultval)
+{
+    if (t->exception != jl_nothing)
+        t->state = failed_sym;
+    else
+        t->state = done_sym;
+    t->result = resultval;
+    // TODO: early free of t->stkbuf
+#ifdef COPY_STACKS
+    t->stkbuf = NULL;
+#endif
+    if (task_done_hook_func == NULL) {
+        task_done_hook_func = (jl_function_t*)jl_get_global(jl_base_module,
+                                                            jl_symbol("task_done_hook"));
+    }
+    if (task_done_hook_func != NULL) {
+        jl_apply(task_done_hook_func, (jl_value_t**)&t, 1);
+    }
+    abort();
+}
+
+static void NOINLINE NORETURN start_task()
+{
+    // this runs the first time we switch to a task
+    jl_task_t *t = jl_current_task;
+    jl_value_t *res;
+    res = jl_apply(t->start, NULL, 0);
+    finish_task(t, res);
+    abort();
+}
+
+#ifndef ASM_COPY_STACKS
+static void NOINLINE set_base_ctx(char *__stk)
+{
+    if (jl_setjmp(jl_base_ctx, 1)) {
+        start_task();
+    }
+}
+#else
+void set_base_ctx(char *__stk) { }
+#endif
+
+
+DLLEXPORT void julia_init(JL_IMAGE_SEARCH rel)
+{ // keep this function small, since we want to keep the stack frame
+  // leading up to this also quite small
+    _julia_init(rel);
+#ifdef COPY_STACKS
+    char __stk;
+    jl_stackbase = (char*)(((uptrint_t)&__stk + sizeof(__stk))&-16); // also ensures stackbase is 16-byte aligned
+    set_base_ctx(&__stk); // separate function, to record the size of a stack frame
+#endif
+}
+
+#ifndef COPY_STACKS
+static void init_task(jl_task_t *t)
+{
+    if (jl_setjmp(t->ctx, 0)) {
+        start_task();
+    }
+    // this runs when the task is created
+    ptrint_t local_sp = (ptrint_t)&t;
+    ptrint_t new_sp = (ptrint_t)t->stack + t->ssize - _frame_offset;
+#ifdef _P64
+    // SP must be 16-byte aligned
+    new_sp = new_sp&-16;
+    local_sp = local_sp&-16;
+#endif
+    memcpy((void*)new_sp, (void*)local_sp, _frame_offset);
+    rebase_state(&t->ctx, local_sp, new_sp);
 }
 #endif
 
@@ -242,13 +316,38 @@ static void ctx_switch(jl_task_t *t, jl_jmp_buf *where)
         }
 
         t->last = jl_current_task;
+        gc_wb(t, t->last);
         jl_current_task = t;
 
 #ifdef COPY_STACKS
         if (t->stkbuf) {
             restore_stack(t, where, NULL);
         } else {
+#ifdef ASM_COPY_STACKS
+            void *stackbase = jl_stackbase;
+#ifdef _CPU_X86_64_
+#ifdef _OS_WINDOWS_
+            stackbase -= 0x20;
+#endif
+            asm(" movq %0, %%rsp;\n"
+                " xorq %%rbp, %%rbp;\n"
+                " push %%rbp;\n" // instead of RSP
+                " jmp %P1;\n" // call stack_task with fake stack frame
+                " ud2"
+                : : "r"(stackbase), "i"(&start_task) : "memory" );
+#elif defined(_CPU_X86_)
+            asm(" movl %0, %%esp;\n"
+                " xorl %%ebp, %%ebp;\n"
+                " push %%ebp;\n" // instead of ESP
+                " jmp %P1;\n" // call stack_task with fake stack frame
+                " ud2"
+                : : "r" (stackbase), ""(&start_task) : "memory" );
+#else
+#error ASM_COPY_STACKS not supported on this cpu architecture
+#endif
+#else // ASM_COPY_STACKS
             jl_longjmp(jl_base_ctx, 1);
+#endif
         }
 #else
         jl_longjmp(*where, 1);
@@ -368,74 +467,6 @@ jl_value_t *jl_switchto(jl_task_t *t, jl_value_t *arg)
     return switchto(t);
 }
 
-static jl_function_t *task_done_hook_func=NULL;
-
-static void finish_task(jl_task_t *t, jl_value_t *resultval)
-{
-    if (t->exception != jl_nothing)
-        t->state = failed_sym;
-    else
-        t->state = done_sym;
-    t->result = resultval;
-    // TODO: early free of t->stkbuf
-#ifdef COPY_STACKS
-    t->stkbuf = NULL;
-#endif
-    if (task_done_hook_func == NULL) {
-        task_done_hook_func = (jl_function_t*)jl_get_global(jl_base_module,
-                                                            jl_symbol("task_done_hook"));
-    }
-    if (task_done_hook_func != NULL) {
-        jl_apply(task_done_hook_func, (jl_value_t**)&t, 1);
-    }
-    assert(0);
-}
-
-static void start_task(jl_task_t *t)
-{
-    // this runs the first time we switch to t
-    jl_value_t *arg = jl_task_arg_in_transit;
-    jl_value_t *res;
-    JL_GC_PUSH1(&arg);
-
-#ifdef COPY_STACKS
-    ptrint_t local_sp = (ptrint_t)jl_pgcstack;
-    // here we attempt to figure out how big our stack frame is, since we
-    // might need to copy all of it later. this is a bit of a fuzzy guess.
-    local_sp += sizeof(jl_gcframe_t);
-    local_sp += 12*sizeof(void*);
-    t->stackbase = (void*)(local_sp + _frame_offset);
-#endif
-    res = jl_apply(t->start, NULL, 0);
-    JL_GC_POP();
-    finish_task(t, res);
-    assert(0);
-}
-
-DLLEXPORT void jl_handle_stack_start()
-{
-    start_task(jl_current_task);
-}
-
-#ifndef COPY_STACKS
-static void init_task(jl_task_t *t)
-{
-    if (jl_setjmp(t->ctx, 0)) {
-        start_task(t);
-    }
-    // this runs when the task is created
-    ptrint_t local_sp = (ptrint_t)&t;
-    ptrint_t new_sp = (ptrint_t)t->stack + t->ssize - _frame_offset;
-#ifdef _P64
-    // SP must be 16-byte aligned
-    new_sp = new_sp&-16;
-    local_sp = local_sp&-16;
-#endif
-    memcpy((void*)new_sp, (void*)local_sp, _frame_offset);
-    rebase_state(&t->ctx, local_sp, new_sp);
-}
-#endif
-
 ptrint_t bt_data[MAX_BT_SIZE+1];
 size_t bt_size = 0;
 
@@ -484,8 +515,16 @@ static PVOID CALLBACK JuliaFunctionTableAccess64(
     DWORD64 ImageBase;
     PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(AddrBase, &ImageBase, &HistoryTable);
     if (fn) return fn;
-#endif
+    if (jl_in_stackwalk) {
+        return 0;
+    }
+    jl_in_stackwalk = 1;
+    PVOID ftable = SymFunctionTableAccess64(hProcess, AddrBase);
+    jl_in_stackwalk = 0;
+    return ftable;
+#else
     return SymFunctionTableAccess64(hProcess, AddrBase);
+#endif
 }
 static DWORD64 WINAPI JuliaGetModuleBase64(
         _In_  HANDLE hProcess,
@@ -496,6 +535,13 @@ static DWORD64 WINAPI JuliaGetModuleBase64(
     DWORD64 ImageBase;
     PRUNTIME_FUNCTION fn = RtlLookupFunctionEntry(dwAddr, &ImageBase, &HistoryTable);
     if (fn) return ImageBase;
+    if (jl_in_stackwalk) {
+        return 0;
+    }
+    jl_in_stackwalk = 1;
+    DWORD64 fbase = SymGetModuleBase64(hProcess, dwAddr);
+    jl_in_stackwalk = 0;
+    return fbase;
 #else
     if (dwAddr == HistoryTable.dwAddr) return HistoryTable.ImageBase;
     DWORD64 ImageBase = jl_getUnwindInfo(dwAddr);
@@ -504,8 +550,8 @@ static DWORD64 WINAPI JuliaGetModuleBase64(
         HistoryTable.ImageBase = ImageBase;
         return ImageBase;
     }
-#endif
     return SymGetModuleBase64(hProcess, dwAddr);
+#endif
 }
 
 int needsSymRefreshModuleList;
@@ -514,52 +560,74 @@ DLLEXPORT size_t rec_backtrace(ptrint_t *data, size_t maxsize)
 {
     CONTEXT Context;
     memset(&Context, 0, sizeof(Context));
-    jl_in_stackwalk = 1;
     RtlCaptureContext(&Context);
-    jl_in_stackwalk = 0;
     return rec_backtrace_ctx(data, maxsize, &Context);
 }
 DLLEXPORT size_t rec_backtrace_ctx(ptrint_t *data, size_t maxsize, CONTEXT *Context)
 {
-    if (jl_in_stackwalk) {
-        return 0;
-    }
-    STACKFRAME64 stk;
-    memset(&stk, 0, sizeof(stk));
-
-    if (needsSymRefreshModuleList && hSymRefreshModuleList != 0) {
+    if (needsSymRefreshModuleList && hSymRefreshModuleList != 0 && !jl_in_stackwalk) {
         jl_in_stackwalk = 1;
         hSymRefreshModuleList(GetCurrentProcess());
         jl_in_stackwalk = 0;
         needsSymRefreshModuleList = 0;
     }
-#if defined(_CPU_X86_64_)
-    DWORD MachineType = IMAGE_FILE_MACHINE_AMD64;
-    stk.AddrPC.Offset = Context->Rip;
-    stk.AddrStack.Offset = Context->Rsp;
-    stk.AddrFrame.Offset = Context->Rbp;
-#elif defined(_CPU_X86_)
+#if !defined(_CPU_X86_64_)
+    if (jl_in_stackwalk) {
+        return 0;
+    }
     DWORD MachineType = IMAGE_FILE_MACHINE_I386;
+    STACKFRAME64 stk;
+    memset(&stk, 0, sizeof(stk));
     stk.AddrPC.Offset = Context->Eip;
     stk.AddrStack.Offset = Context->Esp;
     stk.AddrFrame.Offset = Context->Ebp;
-#else
-#error WIN16 not supported :P
-#endif
     stk.AddrPC.Mode = AddrModeFlat;
     stk.AddrStack.Mode = AddrModeFlat;
     stk.AddrFrame.Mode = AddrModeFlat;
+    jl_in_stackwalk = 1;
+#endif
 
     size_t n = 0;
-    jl_in_stackwalk = 1;
     while (n < maxsize) {
+#ifndef _CPU_X86_64_
         BOOL result = StackWalk64(MachineType, GetCurrentProcess(), hMainThread,
             &stk, Context, NULL, JuliaFunctionTableAccess64, JuliaGetModuleBase64, NULL);
-        data[n++] = (intptr_t)stk.AddrPC.Offset;
         if (!result)
             break;
+        data[n++] = (intptr_t)stk.AddrPC.Offset;
+#else
+        DWORD64 ImageBase = JuliaGetModuleBase64(GetCurrentProcess(), Context->Rip);
+        if (!ImageBase)
+            break;
+        PRUNTIME_FUNCTION FunctionEntry = (PRUNTIME_FUNCTION)JuliaFunctionTableAccess64(GetCurrentProcess(), Context->Rip);
+        if (!FunctionEntry) { // assume this is a NO_FPO RBP-based function
+            Context->Rsp = Context->Rbp;                 // MOV RSP, RBP
+            Context->Rbp = *(DWORD64*)Context->Rsp;      // POP RBP
+            Context->Rsp = Context->Rsp + sizeof(void*);
+            Context->Rip = *(DWORD64*)Context->Rsp;      // POP RIP (aka RET)
+            Context->Rsp = Context->Rsp + sizeof(void*);
+        }
+        else {
+            PVOID HandlerData;
+            DWORD64 EstablisherFrame;
+            (void)RtlVirtualUnwind(
+                    0 /*UNW_FLAG_NHANDLER*/,
+                    ImageBase,
+                    Context->Rip,
+                    FunctionEntry,
+                    Context,
+                    &HandlerData,
+                    &EstablisherFrame,
+                    NULL);
+        }
+        if (!Context->Rip)
+            break;
+        data[n++] = (intptr_t)Context->Rip;
+#endif
     }
+#if !defined(_CPU_X86_64_)
     jl_in_stackwalk = 0;
+#endif
     return n;
 }
 #else
@@ -581,9 +649,8 @@ DLLEXPORT size_t rec_backtrace_ctx(ptrint_t *data, size_t maxsize, unw_context_t
     do {
         if (n >= maxsize)
             break;
-        if (unw_get_reg(&cursor, UNW_REG_IP, &ip) < 0) {
+        if (unw_get_reg(&cursor, UNW_REG_IP, &ip) < 0)
             break;
-        }
         data[n++] = ip;
     } while (unw_step(&cursor) > 0);
     return n;
@@ -602,9 +669,8 @@ size_t rec_backtrace_ctx_dwarf(ptrint_t *data, size_t maxsize, unw_context_t *uc
     do {
         if (n >= maxsize)
             break;
-        if (unw_get_reg(&cursor, UNW_REG_IP, &ip) < 0) {
+        if (unw_get_reg(&cursor, UNW_REG_IP, &ip) < 0)
             break;
-        }
         data[n++] = ip;
     } while (unw_step(&cursor) > 0);
     return n;
@@ -706,7 +772,8 @@ void NORETURN throw_internal(jl_value_t *e)
             JL_PRINTF(JL_STDERR, "fatal: error thrown and no exception handler available.\n");
             jl_static_show(JL_STDERR, e);
             JL_PRINTF(JL_STDERR, "\n");
-            exit(1);
+            jlbacktrace();
+            jl_exit(1);
         }
         jl_current_task->exception = e;
         finish_task(jl_current_task, e);
@@ -769,6 +836,7 @@ DLLEXPORT jl_task_t *jl_new_task(jl_function_t *start, size_t ssize)
 
     char *stk = allocb(ssize+pagesz+(pagesz-1));
     t->stkbuf = stk;
+    gc_wb_buf(t, t->stkbuf);
     stk = (char*)LLT_ALIGN((uptrint_t)stk, pagesz);
     // add a guard page to detect stack overflow
     // the GC might read this area, which is ok, just prevent writes
@@ -849,7 +917,6 @@ void jl_init_tasks(void *stack, size_t ssize)
     jl_current_task = (jl_task_t*)allocobj(sizeof(jl_task_t));
     jl_current_task->type = (jl_value_t*)jl_task_type;
 #ifdef COPY_STACKS
-    jl_current_task->stackbase = NULL;
     jl_current_task->ssize = 0;  // size of saved piece
     jl_current_task->bufsz = 0;
 #else

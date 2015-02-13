@@ -37,7 +37,7 @@ exit(n) = ccall(:jl_exit, Void, (Int32,), n)
 exit() = exit(0)
 quit() = exit()
 
-function repl_cmd(cmd)
+function repl_cmd(cmd, out)
     shell = shell_split(get(ENV,"JULIA_SHELL",get(ENV,"SHELL","/bin/sh")))
     # Note that we can't support the fish shell due to its lack of subshells
     #   See this for details: https://github.com/JuliaLang/julia/issues/4918
@@ -48,17 +48,26 @@ function repl_cmd(cmd)
     end
 
     if isempty(cmd.exec)
-        error("no cmd to execute")
+        throw(ArgumentError("no cmd to execute"))
     elseif cmd.exec[1] == "cd"
+        new_oldpwd = pwd()
         if length(cmd.exec) > 2
-            error("cd method only takes one argument")
+            throw(ArgumentError("cd method only takes one argument"))
         elseif length(cmd.exec) == 2
             dir = cmd.exec[2]
-            cd(@windows? dir : readchomp(`$shell -c "echo $(shell_escape(dir))"`))
+            if dir == "-"
+                if !haskey(ENV, "OLDPWD")
+                    error("cd: OLDPWD not set")
+                end
+                cd(ENV["OLDPWD"])
+            else
+                cd(@windows? dir : readchomp(`$shell -c "echo $(shell_escape(dir))"`))
+            end
         else
             cd()
         end
-        println(pwd())
+        ENV["OLDPWD"] = new_oldpwd
+        println(out, pwd())
     else
         run(ignorestatus(@windows? cmd : (isa(STDIN, TTY) ? `$shell -i -c "($(shell_escape(cmd))) && true"` : `$shell -c "($(shell_escape(cmd))) && true"`)))
     end
@@ -129,6 +138,9 @@ end
 
 _repl_start = Condition()
 
+syntax_deprecation_warnings(warn::Bool) =
+    bool(ccall(:jl_parse_depwarn, Cint, (Cint,), warn))
+
 function parse_input_line(s::AbstractString)
     # s = bytestring(s)
     # (expr, pos) = parse(s, 1)
@@ -177,7 +189,7 @@ function init_bind_addr(args::Vector{UTF8String})
     btoidx = findfirst(args, "--bind-to")
     if btoidx > 0
         bind_to = split(args[btoidx+1], ":")
-        bind_addr = parseip(bind_to[1])
+        bind_addr = string(parseip(bind_to[1]))
         if length(bind_to) > 1
             bind_port = parseint(bind_to[2])
         else
@@ -186,11 +198,11 @@ function init_bind_addr(args::Vector{UTF8String})
     else
         bind_port = 0
         try
-            bind_addr = getipaddr()
+            bind_addr = string(getipaddr())
         catch
             # All networking is unavailable, initialize bind_addr to the loopback address
             # Will cause an exception to be raised only when used.
-            bind_addr = ip"127.0.0.1"
+            bind_addr = "127.0.0.1"
         end
     end
     global LPROC
@@ -210,8 +222,15 @@ function process_options(args::Vector{UTF8String})
         if args[i]=="-q" || args[i]=="--quiet"
             quiet = true
         elseif args[i]=="--worker"
-            start_worker()
-            # doesn't return
+            worker_arg = (i == length(args)) ? "" : args[i+1]
+
+            if worker_arg == "custom"
+                i += 1
+            else
+                start_worker()
+                # doesn't return
+            end
+
         elseif args[i]=="--bind-to"
             i+=1 # has already been processed
         elseif args[i]=="-e" || args[i]=="--eval"
@@ -270,7 +289,7 @@ function process_options(args::Vector{UTF8String})
             startup = false
         elseif args[i] == "-i"
             global is_interactive = true
-        elseif beginswith(args[i], "--color")
+        elseif startswith(args[i], "--color")
             if args[i] == "--color"
                 color_set = true
                 global have_color = true
@@ -343,11 +362,12 @@ function load_juliarc()
 end
 
 function load_machine_file(path::AbstractString)
-    machines = AbstractString[]
+    machines = []
     for line in split(readall(path),'\n'; keep=false)
-        s = split(line,'*'; keep=false)
+        s = map!(strip, split(line,'*'; keep=false))
         if length(s) > 1
-            append!(machines,fill(s[2],int(s[1])))
+            cnt = isnumber(s[1]) ? int(s[1]) : symbol(s[1])
+            push!(machines,(s[2], cnt))
         else
             push!(machines,line)
         end
@@ -356,9 +376,13 @@ function load_machine_file(path::AbstractString)
 end
 
 function early_init()
+    global const JULIA_HOME = ccall(:jl_get_julia_home, Any, ())
+    # make sure OpenBLAS does not set CPU affinity (#1070, #9639)
+    ENV["OPENBLAS_MAIN_FREE"] = get(ENV, "OPENBLAS_MAIN_FREE",
+                                    get(ENV, "GOTOBLAS_MAIN_FREE", "1"))
     Sys.init_sysinfo()
     if CPU_CORES > 8 && !("OPENBLAS_NUM_THREADS" in keys(ENV)) && !("OMP_NUM_THREADS" in keys(ENV))
-        # Prevent openblas from stating to many threads, unless/until specifically requested
+        # Prevent openblas from starting too many threads, unless/until specifically requested
         ENV["OPENBLAS_NUM_THREADS"] = 8
     end
 end
@@ -372,13 +396,10 @@ import .Terminals
 import .REPL
 
 function _start()
-    early_init()
-
     try
         init_parallel()
         init_bind_addr(ARGS)
         any(a->(a=="--worker"), ARGS) || init_head_sched()
-        init_load_path()
         (quiet,repl,startup,color_set,no_history_file) = process_options(copy(ARGS))
 
         local term
@@ -394,6 +415,7 @@ function _start()
                 quiet || REPL.banner(term,term)
                 if term.term_type == "dumb"
                     active_repl = REPL.BasicREPL(term)
+                    quiet || warn("Terminal not fully functional")
                 else
                     active_repl = REPL.LineEditREPL(term, true)
                     active_repl.no_history_file = no_history_file
@@ -412,32 +434,25 @@ function _start()
                 # note: currently IOStream is used for file STDIN
                 if isa(STDIN,File) || isa(STDIN,IOStream)
                     # reading from a file, behave like include
-                    eval(parse_input_line(readall(STDIN)))
+                    eval(Main,parse_input_line(readall(STDIN)))
                 else
                     # otherwise behave repl-like
                     while !eof(STDIN)
                         eval_user_input(parse_input_line(STDIN), true)
                     end
                 end
-                if have_color
-                    print(color_normal)
-                end
-                quit()
+            else
+                REPL.run_repl(active_repl)
             end
-            REPL.run_repl(active_repl)
         end
     catch err
         display_error(err,catch_backtrace())
         println()
         exit(1)
     end
-    if is_interactive
-        if have_color
-            print(color_normal)
-        end
-        println()
+    if is_interactive && have_color
+        print(color_normal)
     end
-    ccall(:uv_atexit_hook, Void, ())
 end
 
 const atexit_hooks = []

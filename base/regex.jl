@@ -6,7 +6,7 @@ const DEFAULT_OPTS = PCRE.JAVASCRIPT_COMPAT | PCRE.UTF8 | PCRE.NO_UTF8_CHECK
 
 type Regex
     pattern::ByteString
-    options::UInt32
+    options::Int32
     regex::Ptr{Void}
     extra::Ptr{Void}
     ovec::Vector{Int32}
@@ -16,7 +16,7 @@ type Regex
         pattern = bytestring(pattern)
         options = int32(options)
         if (options & ~PCRE.OPTIONS_MASK) != 0
-            error("invalid regex options: $options")
+            throw(ArgumentError("invalid regex options: $options"))
         end
         re = compile(new(pattern, options, C_NULL, C_NULL, Array(Int32, 0)))
         finalizer(re,
@@ -35,7 +35,7 @@ function Regex(pattern::AbstractString, flags::AbstractString)
                    f=='m' ? PCRE.MULTILINE :
                    f=='s' ? PCRE.DOTALL    :
                    f=='x' ? PCRE.EXTENDED  :
-                   error("unknown regex flag: $f")
+                   throw(ArgumentError("unknown regex flag: $f"))
     end
     Regex(pattern, options)
 end
@@ -113,7 +113,7 @@ function ismatch(r::Regex, s::SubString, offset::Integer=0)
                   r.ovec)
 end
 
-function match(re::Regex, str::UTF8String, idx::Integer, add_opts::UInt32=uint32(0))
+function match(re::Regex, str::UTF8String, idx::Integer, add_opts::Int32=int32(0))
     opts = re.options & PCRE.EXECUTE_MASK | add_opts
     compile(re)
     if !PCRE.exec(re.regex, re.extra, str, idx-1, opts, re.ovec)
@@ -127,7 +127,7 @@ function match(re::Regex, str::UTF8String, idx::Integer, add_opts::UInt32=uint32
     RegexMatch(mat, cap, re.ovec[1]+1, off)
 end
 
-match(re::Regex, str::Union(ByteString,SubString), idx::Integer, add_opts::UInt32=uint32(0)) =
+match(re::Regex, str::Union(ByteString,SubString), idx::Integer, add_opts::Int32=int32(0)) =
     match(re, utf8(str), idx, add_opts)
 
 match(r::Regex, s::AbstractString) = match(r, s, start(s))
@@ -200,8 +200,8 @@ immutable RegexMatchIterator
     end
 end
 compile(itr::RegexMatchIterator) = (compile(itr.regex); itr)
-eltype(itr::RegexMatchIterator) = RegexMatch
-start(itr::RegexMatchIterator) = match(itr.regex, itr.string, 1, uint32(0))
+eltype(::Type{RegexMatchIterator}) = RegexMatch
+start(itr::RegexMatchIterator) = match(itr.regex, itr.string, 1, int32(0))
 done(itr::RegexMatchIterator, prev_match) = (prev_match == nothing)
 
 # Assumes prev_match is not nothing
@@ -218,10 +218,10 @@ function next(itr::RegexMatchIterator, prev_match)
         offset = prev_match.offset + endof(prev_match.match)
     end
 
-    opts_nonempty = uint32(PCRE.ANCHORED | PCRE.NOTEMPTY_ATSTART)
+    opts_nonempty = int32(PCRE.ANCHORED | PCRE.NOTEMPTY_ATSTART)
     while true
         mat = match(itr.regex, itr.string, offset,
-                    prevempty ? opts_nonempty : uint32(0))
+                    prevempty ? opts_nonempty : int32(0))
 
         if mat === nothing
             if prevempty && offset <= length(itr.string.data)

@@ -15,11 +15,11 @@ immutable StepRange{T,S} <: OrdinalRange{T,S}
 
     function StepRange(start::T, step::S, stop::T)
         if T<:FloatingPoint || S<:FloatingPoint
-            error("StepRange should not be used with floating point")
+            throw(ArgumentError("StepRange should not be used with floating point"))
         end
         z = zero(S)
-        step == z && error("step cannot be zero")
-        step != step && error("step cannot be NaN")
+        step == z && throw(ArgumentError("step cannot be zero"))
+        step != step && throw(ArgumentError("step cannot be NaN"))
 
         if stop == start
             last = stop
@@ -62,7 +62,8 @@ immutable UnitRange{T<:Real} <: OrdinalRange{T,Int}
     start::T
     stop::T
 
-    UnitRange(start, stop) = new(start, ifelse(stop >= start, stop, start-one(stop-start)))
+    UnitRange(start, stop) =
+        new(start, ifelse(stop >= start, stop, convert(T,start-one(stop-start))))
 end
 UnitRange{T<:Real}(start::T, stop::T) = UnitRange{T}(start, stop)
 
@@ -82,6 +83,8 @@ range{T}(a::T, len::Integer) =
 colon{A<:Real,C<:Real}(a::A, b, c::C) = colon(convert(promote_type(A,C),a), b, convert(promote_type(A,C),c))
 
 colon{T<:Real}(start::T, step, stop::T) = StepRange(start, step, stop)
+colon{T<:Real}(start::T, step::T, stop::T) = StepRange(start, step, stop)
+colon{T<:Real}(start::T, step::Real, stop::T) = StepRange(promote(start, step, stop)...)
 
 colon{T}(start::T, step, stop::T) = StepRange(start, step, stop)
 
@@ -117,8 +120,8 @@ function rat(x)
 end
 
 function colon{T<:FloatingPoint}(start::T, step::T, stop::T)
-    step == 0                    && error("range step cannot be zero")
-    start == stop                && return FloatRange{T}(start,step,1,1)
+    step == 0 && throw(ArgumentError("range step cannot be zero"))
+    start == stop && return FloatRange{T}(start,step,1,1)
     (0 < step) != (start < stop) && return FloatRange{T}(start,step,0,1)
 
     # float range "lifting"
@@ -160,7 +163,7 @@ range(a::FloatingPoint, st::Real, len::Integer) = FloatRange(a, float(st), len, 
 linrange(a::Real, b::Real, len::Integer) =
     len >= 2           ? range(a, (b-a)/(len-1), len) :
     len == 1 && a == b ? range(a, zero((b-a)/(len-1)), 1) :
-                         error("invalid range length")
+                         throw(ArgumentError("invalid range length"))
 
 ## interface implementations
 
@@ -220,10 +223,10 @@ last{T}(r::StepRange{T}) = r.stop
 last(r::UnitRange) = r.stop
 last{T}(r::FloatRange{T}) = convert(T, (r.start + (r.len-1)*r.step)/r.divisor)
 
-minimum(r::UnitRange) = isempty(r) ? error("range must be non-empty") : first(r)
-maximum(r::UnitRange) = isempty(r) ? error("range must be non-empty") : last(r)
-minimum(r::Range)  = isempty(r) ? error("range must be non-empty") : min(first(r), last(r))
-maximum(r::Range)  = isempty(r) ? error("range must be non-empty") : max(first(r), last(r))
+minimum(r::UnitRange) = isempty(r) ? throw(ArgumentError("range must be non-empty")) : first(r)
+maximum(r::UnitRange) = isempty(r) ? throw(ArgumentError("range must be non-empty")) : last(r)
+minimum(r::Range)  = isempty(r) ? throw(ArgumentError("range must be non-empty")) : min(first(r), last(r))
+maximum(r::Range)  = isempty(r) ? throw(ArgumentError("range must be non-empty")) : max(first(r), last(r))
 
 ctranspose(r::Range) = [x for _=1, x=r]
 transpose(r::Range) = r'
@@ -255,11 +258,11 @@ done(r::UnitRange, i) = i==oftype(i,r.stop)+1
 getindex(r::Range, i::Real) = getindex(r, to_index(i))
 
 function getindex{T}(r::Range{T}, i::Integer)
-    1 <= i <= length(r) || error(BoundsError)
+    1 <= i <= length(r) || throw(BoundsError())
     convert(T, first(r) + (i-1)*step(r))
 end
 function getindex{T}(r::FloatRange{T}, i::Integer)
-    1 <= i <= length(r) || error(BoundsError)
+    1 <= i <= length(r) || throw(BoundsError())
     convert(T, (r.start + (i-1)*r.step)/r.divisor)
 end
 
@@ -300,6 +303,7 @@ end
 show(io::IO, r::UnitRange) = print(io, repr(first(r)), ':', repr(last(r)))
 
 =={T<:Range}(r::T, s::T) = (first(r) == first(s)) & (step(r) == step(s)) & (last(r) == last(s))
+==(r::OrdinalRange, s::OrdinalRange) = (first(r) == first(s)) & (step(r) == step(s)) & (last(r) == last(s))
 
 function ==(r::Range, s::Range)
     lr = length(r)
@@ -326,7 +330,7 @@ intersect{T<:Integer}(i::Integer, r::UnitRange{T}) =
 intersect{T<:Integer}(r::UnitRange{T}, i::Integer) = intersect(i, r)
 
 function intersect{T1<:Integer, T2<:Integer}(r::UnitRange{T1}, s::StepRange{T2})
-    if length(s) == 0
+    if isempty(s)
         range(first(r), 0)
     elseif step(s) == 0
         intersect(first(s), r)
@@ -353,7 +357,7 @@ function intersect{T1<:Integer, T2<:Integer}(r::StepRange{T1}, s::UnitRange{T2})
 end
 
 function intersect(r::StepRange, s::StepRange)
-    if length(r) == 0 || length(s) == 0
+    if isempty(r) || isempty(s)
         return range(first(r), step(r), 0)
     elseif step(s) < 0
         return intersect(r, reverse(s))
@@ -494,11 +498,18 @@ convert{T}(::Type{FloatRange{T}}, r::OrdinalRange) =
 
 ## concatenation ##
 
-function vcat{T}(r::Range{T})
-    n = length(r)
+function vcat{T}(r::Range{T}, rs::Range{T}...)
+    n::Int = length(r)
+    for ra in rs
+        n += length(ra)
+    end
     a = Array(T,n)
     i = 1
     for x in r
+        @inbounds a[i] = x
+        i += 1
+    end
+    for ra in rs, x in ra
         @inbounds a[i] = x
         i += 1
     end
@@ -506,21 +517,9 @@ function vcat{T}(r::Range{T})
 end
 
 convert{T}(::Type{Array{T,1}}, r::Range{T}) = vcat(r)
+collect(r::Range) = vcat(r)
 
-function vcat{T}(rs::Range{T}...)
-    n = sum(length,rs)::Int
-    a = Array(T,n)
-    i = 1
-    for r in rs
-        for x in r
-            @inbounds a[i] = x
-            i += 1
-        end
-    end
-    return a
-end
-
-reverse(r::OrdinalRange) = range(last(r), -step(r), length(r))
+reverse(r::OrdinalRange) = colon(last(r), -step(r), first(r))
 reverse(r::FloatRange)   = FloatRange(r.start + (r.len-1)*r.step, -r.step, r.len, r.divisor)
 
 ## sorting ##
@@ -544,22 +543,16 @@ function sum{T<:Real}(r::Range{T})
 end
 
 function mean{T<:Real}(r::Range{T})
-    isempty(r) && error("mean of an empty range is undefined")
+    isempty(r) && throw(ArgumentError("mean of an empty range is undefined"))
     (first(r) + last(r)) / 2
 end
 
 median{T<:Real}(r::Range{T}) = mean(r)
-
-function map!(f::Callable, dest, r::Range)
-    i = 1
-    for ri in r dest[i] = f(ri); i+=1; end
-    dest
-end
 
 function in(x, r::Range)
     n = step(r) == 0 ? 1 : round(Integer,(x-first(r))/step(r))+1
     n >= 1 && n <= length(r) && r[n] == x
 end
 
-in{T<:Integer}(x, r::Range{T}) = isinteger(x) && !isempty(r) && x>=minimum(r) && x<=maximum(r) && (mod(int(x)-first(r),step(r)) == 0)
+in{T<:Integer}(x, r::Range{T}) = isinteger(x) && !isempty(r) && x>=minimum(r) && x<=maximum(r) && (mod(convert(T,x),step(r))-mod(first(r),step(r)) == 0)
 in(x::Char, r::Range{Char}) = !isempty(r) && x >= minimum(r) && x <= maximum(r) && (mod(int(x) - int(first(r)), step(r)) == 0)

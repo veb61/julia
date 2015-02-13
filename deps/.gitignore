@@ -14,6 +14,8 @@
 /libosxunwind-*
 /lighttpd-*
 /libcxx-*
+/libffi-*
+/libgit*
 /llvm-*
 /lldb-*
 /mpfr-*
@@ -29,4 +31,4 @@
 /virtualenv-*
 /julia-env
 /objconv*
-/libgit*
+/Rmath-julia*

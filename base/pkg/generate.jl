@@ -54,12 +54,13 @@ function package(
             Generate.entrypoint(pkg,force=force)
             Generate.tests(pkg,force=force)
             Generate.travis(pkg,force=force)
+            Generate.gitignore(pkg,force=force)
 
             msg = """
             $pkg.jl $(isnew ? "generated" : "regenerated") files.
 
                 license:  $license
-                authors:  $(join([authors],", "))
+                authors:  $(join([authors...],", "))
                 years:    $years
                 user:     $user
 
@@ -136,23 +137,28 @@ end
 function travis(pkg::AbstractString; force::Bool=false)
     genfile(pkg,".travis.yml",force) do io
         print(io, """
-        language: cpp
-        compiler:
-          - clang
+        language: julia
+        os:
+          - linux
+          - osx
+        julia:
+          - release
+          - nightly
         notifications:
           email: false
-        env:
-          matrix:
-            - JULIAVERSION="juliareleases"
-            - JULIAVERSION="julianightlies"
-        before_install:
-          - sudo add-apt-repository ppa:staticfloat/julia-deps -y
-          - sudo add-apt-repository ppa:staticfloat/\${JULIAVERSION} -y
-          - sudo apt-get update -qq -y
-          - sudo apt-get install libpcre3-dev julia -y
-          - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
-        script:
-          - julia --check-bounds=yes -e 'versioninfo(); Pkg.init(); Pkg.clone(pwd()); Pkg.build("$pkg"); Pkg.test("$pkg")'
+        # uncomment the following lines to override the default test script
+        #script:
+        #  - if [[ -a .git/shallow ]]; then git fetch --unshallow; fi
+        #  - julia --check-bounds=yes -e 'Pkg.clone(pwd()); Pkg.build("$pkg"); Pkg.test("$pkg"; coverage=true)'
+        """)
+    end
+end
+
+function gitignore(pkg::AbstractString; force::Bool=false)
+    genfile(pkg,".gitignore",force) do io
+        print(io, """
+        *.jl.cov
+        *.jl.mem
         """)
     end
 end

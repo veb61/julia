@@ -31,6 +31,7 @@
    manual/constructors
    manual/conversion-and-promotion
    manual/modules
+   manual/documentation
    manual/metaprogramming
    manual/arrays
    manual/linear-algebra
@@ -42,7 +43,9 @@
    manual/interacting-with-julia
    manual/embedding
    manual/packages
+   manual/profile
    manual/performance-tips
+   manual/workflow-tips
    manual/style-guide
    manual/faq
    manual/noteworthy-differences
@@ -58,17 +61,23 @@
    :maxdepth: 1
 
    stdlib/base
-   stdlib/sparse
+   stdlib/collections
+   stdlib/math
+   stdlib/numbers
+   stdlib/strings
+   stdlib/arrays
+   stdlib/parallel
    stdlib/linalg
    stdlib/constants
    stdlib/file
+   stdlib/io-network
    stdlib/punctuation
    stdlib/sort
    stdlib/pkg
-   stdlib/collections
    stdlib/graphics
    stdlib/dates
    stdlib/test
+   stdlib/c
    stdlib/profile
 
 .. _devdocs:
@@ -80,5 +89,6 @@ Developer Documentation
 .. toctree::
    :maxdepth: 2
 
+   devdocs/reflection
    devdocs/julia
    devdocs/C

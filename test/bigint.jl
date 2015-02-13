@@ -33,7 +33,7 @@ ee = typemax(Int64)
 @test string(d) == "-246913578024691357802469135780"
 @test string(a) == "123456789012345678901234567890"
 
-for i = -10:10, j = [-10:-1,1:10]
+for i = -10:10, j = [-10:-1; 1:10]
     @test div(BigInt(i), BigInt(j)) == div(i,j)
     @test fld(BigInt(i), BigInt(j)) == fld(i,j)
     @test mod(BigInt(i), BigInt(j)) == mod(i,j)
@@ -164,6 +164,8 @@ end
 @test lcm(BigInt(48), BigInt(180)) == 720
 
 @test factorial(BigInt(40)) == BigInt("815915283247897734345611269596115894272000000000")
+@test binomial(BigInt(1), -1) == BigInt(0)
+@test binomial(BigInt(1), 2)  == BigInt(0)
 @test binomial(BigInt(-53), 42) == BigInt("959509335087854414441273718")
 @test binomial(BigInt(113), BigInt(42)) == BigInt("18672199984318438125634054194360")
 
@@ -252,7 +254,7 @@ n = bigfib(1000001)
 s = string(n)
 @test length(s) == 208988
 @test endswith(s, "359244926937501")
-@test beginswith(s, "316047687386689")
+@test startswith(s, "316047687386689")
 
 # serialization (#5133)
 let

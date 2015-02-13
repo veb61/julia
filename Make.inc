@@ -62,6 +62,9 @@ endif
 # libc++ is standard on OS X 10.9, but not for earlier releases
 USE_LIBCPP = 0
 
+# assume we don't have LIBSSP support in our compiler, will enable later if likely true
+HAVE_SSP = 0
+
 # Prevent picking up $ARCH from the environment variables
 ARCH=
 
@@ -241,7 +244,7 @@ FC_BASE = $(CROSS_COMPILE)gfortran
 endif
 FC = $(FC_BASE)
 
-STDLIBCPP_FLAG = 
+STDLIBCPP_FLAG =
 
 ifeq ($(OS), Darwin)
 DARWINVER := $(shell uname -r | cut -b 1-2)
@@ -257,7 +260,7 @@ else
 ifeq ($(DARWINVER_GTE13),1)
 USE_LIBCPP = 1
 STDLIBCPP_FLAG = -stdlib=libstdc++
-else 
+else
 USE_LIBCPP = 0
 endif
 USEGCC = 0
@@ -355,16 +358,16 @@ CPP = $(CC) -E
 AR := $(CROSS_COMPILE)ar
 AS := $(CROSS_COMPILE)as
 LD := $(CROSS_COMPILE)ld
-else
+else #USEMSVC
 CPP = $(CC) -EP
 AR := lib
 ifeq ($(ARCH),x86_64)
 AS := ml64
 else
 AS := ml
-endif
+endif #ARCH
 LD := link
-endif
+endif #USEMSVC
 RANLIB := $(CROSS_COMPILE)ranlib
 
 
@@ -520,6 +523,7 @@ ifeq ($(USE_SYSTEM_LLVM), 1)
 LLVM_CONFIG ?= llvm-config$(EXE)
 LLVM_LLC ?= llc$(EXE)
 JCPPFLAGS+=-DSYSTEM_LLVM
+LLVM_VER = $(shell $(LLVM_CONFIG) --version)
 else
 LLVM_CONFIG=$(build_bindir)/llvm-config$(EXE)
 LLVM_LLC=$(build_bindir)/llc$(EXE)
@@ -656,8 +660,12 @@ endif
 ifeq ($(OS), Linux)
 OSLIBS += -ldl -lrt -lpthread -Wl,--export-dynamic -Wl,--version-script=$(JULIAHOME)/src/julia.expmap -Wl,--no-whole-archive $(LIBUNWIND)
 JLDFLAGS = -Wl,-Bdynamic
+ifeq (-Bsymbolic-functions, $(shell $(LD) --help | grep -o -e "-Bsymbolic-functions"))
 JLIBLDFLAGS = -Wl,-Bsymbolic-functions
 else
+JLIBLDFLAGS =
+endif
+else #Linux
 JLIBLDFLAGS =
 endif
 
@@ -674,21 +682,23 @@ OSLIBS += -ldl -Wl,-w -framework CoreFoundation -framework CoreServices $(LIBUNW
 WHOLE_ARCHIVE = -Xlinker -all_load
 NO_WHOLE_ARCHIVE =
 JLDFLAGS =
+HAVE_SSP = 1
 endif
 
 ifeq ($(OS), WINNT)
 ifneq ($(USEMSVC), 1)
+HAVE_SSP = 1
 OSLIBS += -Wl,--export-all-symbols -Wl,--version-script=$(JULIAHOME)/src/julia.expmap \
-	$(NO_WHOLE_ARCHIVE) -lpsapi -lkernel32 -lws2_32 -liphlpapi -lwinmm -ldbghelp -lssp
+	$(NO_WHOLE_ARCHIVE) -lpsapi -lkernel32 -lws2_32 -liphlpapi -lwinmm -ldbghelp
 JLDFLAGS = -Wl,--stack,8388608
 ifeq ($(ARCH),i686)
 JLDFLAGS += -Wl,--large-address-aware
 endif
-else
+else #USEMSVC
 OSLIBS += kernel32.lib ws2_32.lib psapi.lib advapi32.lib iphlpapi.lib shell32.lib winmm.lib
 JLDFLAGS = -stack:8388608
 endif
-JCPPFLAGS += -D_WIN32_WINNT=0x0600
+JCPPFLAGS += -D_WIN32_WINNT=0x0502
 UNTRUSTED_SYSTEM_LIBM = 1
 endif
 
@@ -732,6 +742,13 @@ ifeq ($(USE_INTEL_MKL_FFT), 1)
 USE_SYSTEM_FFTW = 1
 LIBFFTWNAME = libmkl_rt
 LIBFFTWFNAME = libmkl_rt
+endif
+
+ifeq ($(HAVE_SSP),1)
+JCPPFLAGS += -DHAVE_SSP=1
+ifeq ($(USEGCC),1)
+OSLIBS += -lssp
+endif
 endif
 
 # ATLAS

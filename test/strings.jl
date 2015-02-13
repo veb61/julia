@@ -216,9 +216,12 @@ parsehex(s) = parseint(s,16)
 @test parseint(" 2") == 2
 @test parseint("+2\n") == 2
 @test parseint("-2") == -2
-@test_throws ErrorException parseint("   2 \n 0")
-@test_throws ErrorException parseint("2x")
-@test_throws ErrorException parseint("-")
+@test_throws ArgumentError parseint("   2 \n 0")
+@test_throws ArgumentError parseint("2x")
+@test_throws ArgumentError parseint("-")
+
+@test parseint('a') == 10
+@test_throws ArgumentError parseint(typemax(Char))
 
 @test parseint("1234") == 1234
 @test parseint("0x1234") == 0x1234
@@ -240,7 +243,7 @@ end
 for T in (UInt8,UInt16,UInt32,UInt64)
     @test parseint(T,string(typemin(T))) == typemin(T)
     @test parseint(T,string(typemax(T))) == typemax(T)
-    @test_throws ErrorException parseint(T,string(big(typemin(T))-1))
+    @test_throws ArgumentError parseint(T,string(big(typemin(T))-1))
     @test_throws OverflowError parseint(T,string(big(typemax(T))+1))
 end
 
@@ -658,12 +661,12 @@ end
 @test replace("ḟøøƀäṙḟøø", r"(ḟøø|ƀä)", "ƀäṙ") == "ƀäṙƀäṙṙƀäṙ"
 
 
-# {begins,ends}with
-@test beginswith("abcd", 'a')
-@test beginswith("abcd", "a")
-@test beginswith("abcd", "ab")
-@test !beginswith("ab", "abcd")
-@test !beginswith("abcd", "bc")
+# {starts,ends}with
+@test startswith("abcd", 'a')
+@test startswith("abcd", "a")
+@test startswith("abcd", "ab")
+@test !startswith("ab", "abcd")
+@test !startswith("abcd", "bc")
 @test endswith("abcd", 'd')
 @test endswith("abcd", "d")
 @test endswith("abcd", "cd")
@@ -749,7 +752,7 @@ arr = ["a","b","c"]
 
 # string iteration, and issue #1454
 str = "é"
-str_a = [str...]
+str_a = vcat(str...)
 @test length(str_a)==1
 @test str_a[1] == str[1]
 
@@ -841,10 +844,10 @@ bin_val = hex2bytes("07bf")
 @test "0123456789abcdefabcdef" == bytes2hex(hex2bytes("0123456789abcdefABCDEF"))
 
 # odd size
-@test_throws ErrorException hex2bytes("0123456789abcdefABCDEF0")
+@test_throws ArgumentError hex2bytes("0123456789abcdefABCDEF0")
 
 #non-hex characters
-@test_throws ErrorException hex2bytes("0123456789abcdefABCDEFGH")
+@test_throws ArgumentError hex2bytes("0123456789abcdefABCDEFGH")
 
 # sizeof
 @test sizeof("abc") == 3
@@ -904,7 +907,7 @@ bin_val = hex2bytes("07bf")
 # combo
 @test (@sprintf "%f %d %d %f" 1.0 [3 4]... 5) == "1.000000 3 4 5.000000"
 # multi
-@test (@sprintf "%s %f %9.5f %d %d %d %d%d%d%d" [1:6]... [7,8,9,10]...) == "1 2.000000   3.00000 4 5 6 78910"
+@test (@sprintf "%s %f %9.5f %d %d %d %d%d%d%d" [1:6;]... [7,8,9,10]...) == "1 2.000000   3.00000 4 5 6 78910"
 # comprehension
 @test (@sprintf "%s %s %s %d %d %d %f %f %f" Any[10^x+y for x=1:3,y=1:3 ]...) == "11 101 1001 12 102 1002 13.000000 103.000000 1003.000000"
 
@@ -1015,6 +1018,15 @@ let
     @test parse("\udcdb = 1",1,raise=false)[1] == Expr(:error, "invalid character \"\udcdb\"")
 end
 
+@test symbol("asdf") === :asdf
+@test symbol(:abc,"def",'g',"hi",0) === :abcdefghi0
+@test startswith(string(gensym("asdf")),"##asdf#")
+@test gensym("asdf") != gensym("asdf")
+@test gensym() != gensym()
+@test startswith(string(gensym()),"##")
+@test_throws ArgumentError symbol("ab\0")
+@test_throws ArgumentError gensym("ab\0")
+
 # issue #6949
 let f =IOBuffer(),
     x = split("1 2 3")
@@ -1037,11 +1049,11 @@ end
 @test_throws BoundsError checkbounds("hello", 6)
 @test_throws BoundsError checkbounds("hello", 0:3)
 @test_throws BoundsError checkbounds("hello", 4:6)
-@test_throws BoundsError checkbounds("hello", [0:3])
-@test_throws BoundsError checkbounds("hello", [4:6])
+@test_throws BoundsError checkbounds("hello", [0:3;])
+@test_throws BoundsError checkbounds("hello", [4:6;])
 @test checkbounds("hello", 2)
 @test checkbounds("hello", 1:5)
-@test checkbounds("hello", [1:5])
+@test checkbounds("hello", [1:5;])
 
 
 # isvalid(), chr2ind() and ind2chr() for SubString{DirectIndexString}
@@ -1267,6 +1279,11 @@ Base.done(jt::i9178, n) = (jt.ndone += 1 ; n > 3)
 Base.next(jt::i9178, n) = (jt.nnext += 1 ; ("$(jt.nnext),$(jt.ndone)", n+1))
 @test join(i9178(0,0), ";") == "1,1;2,2;3,3;4,4"
 
+# make sure substrings handle last code unit even if not start of codepoint
+let s = "x\u0302"
+    @test s[1:3] == s
+end
+
 # reverseind
 for T in (ASCIIString, UTF8String, UTF16String, UTF32String)
     for prefix in ("", "abcd", "\U0001d6a4\U0001d4c1", "\U0001d6a4\U0001d4c1c", " \U0001d6a4\U0001d4c1")
@@ -1289,3 +1306,38 @@ for T in (ASCIIString, UTF8String, UTF16String, UTF32String)
         end
     end
 end
+
+# issue #9781
+# float(SubString) wasn't tolerant of trailing whitespace, which was different
+# to "normal" strings. This also checks we aren't being too tolerant and allowing
+# any arbitrary trailing characters.
+@test float64("1\n") == 1.0
+@test float64(split("0,1\n",","))[2] == 1.0
+@test_throws ArgumentError float64(split("0,1 X\n",","))[2]
+@test float32("1\n") == 1.0
+@test float32(split("0,1\n",","))[2] == 1.0
+@test_throws ArgumentError float32(split("0,1 X\n",","))[2]
+
+#more ascii tests
+@test convert(ASCIIString, UInt8[32,107,75], "*") == " kK"
+@test convert(ASCIIString, UInt8[132,107,75], "*") == "*kK"
+@test convert(ASCIIString, UInt8[], "*") == ""
+@test convert(ASCIIString, UInt8[255], "*") == "*"
+
+@test ucfirst("Hola")=="Hola"
+@test ucfirst("hola")=="Hola"
+@test ucfirst("")==""
+@test ucfirst("*")=="*"
+
+@test lcfirst("Hola")=="hola"
+@test lcfirst("hola")=="hola"
+@test lcfirst("")==""
+@test lcfirst("*")=="*"
+
+#more UTF8String tests
+@test convert(UTF8String, UInt8[32,107,75], "*") == " kK"
+@test convert(UTF8String, UInt8[132,107,75], "*") == "*kK"
+@test convert(UTF8String, UInt8[32,107,75], "αβ") == " kK"
+@test convert(UTF8String, UInt8[132,107,75], "αβ") == "αβkK"
+@test convert(UTF8String, UInt8[], "*") == ""
+@test convert(UTF8String, UInt8[255], "αβ") == "αβ"

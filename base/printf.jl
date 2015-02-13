@@ -81,7 +81,7 @@ end
 #   [diouxXeEfFgGaAcCsSp%]  # conversion
 
 next_or_die(s::AbstractString, k) = !done(s,k) ? next(s,k) :
-    error("invalid printf format string: ", repr(s))
+    throw(ArgumentError("invalid printf format string: $(repr(s))"))
 
 function parse1(s::AbstractString, k::Integer)
     j = k
@@ -125,7 +125,7 @@ function parse1(s::AbstractString, k::Integer)
     end
     # validate conversion
     if !(c in "diouxXDOUeEfFgGaAcCsSpn")
-        error("invalid printf format string: ", repr(s))
+        throw(ArgumentError("invalid printf format string: $(repr(s))"))
     end
     # TODO: warn about silly flag/conversion combinations
     flags, width, precision, c, k
@@ -909,7 +909,7 @@ function ini_hex(x::SmallFloatingPoint, n::Int, symbols::Array{UInt8,1})
     else
         s, p = frexp(x)
         sigbits = 4*min(n-1,13)
-        s = 0.25*Base.Math.rint(ldexp(s,1+sigbits))
+        s = 0.25*round(ldexp(s,1+sigbits))
         # ensure last 2 exponent bits either 01 or 10
         u = (reinterpret(UInt64,s) & 0x003f_ffff_ffff_ffff) >> (52-sigbits)
         if n > 14
@@ -995,7 +995,7 @@ is_str_expr(ex) =
     endswith(string(ex.args[1]),"str")))
 
 function _printf(macroname, io, fmt, args)
-    isa(fmt, AbstractString) || error("$macroname: format must be a plain static string (no interpolation or prefix)")
+    isa(fmt, AbstractString) || throw(ArgumentError("$macroname: format must be a plain static string (no interpolation or prefix)"))
     sym_args, blk = gen(fmt)
 
     has_splatting = false
@@ -1032,7 +1032,7 @@ function _printf(macroname, io, fmt, args)
           quote
              G = $(esc(x))
              if length(G) != $(length(sym_args))
-                error($macroname,": wrong number of arguments (",length(G),") should be (",$(length(sym_args)),")")
+                throw(ArgumentError($macroname,": wrong number of arguments (",length(G),") should be (",$(length(sym_args)),")"))
              end
           end
        )
@@ -1043,20 +1043,20 @@ function _printf(macroname, io, fmt, args)
 end
 
 macro printf(args...)
-    !isempty(args) || error("@printf: called with zero arguments")
+    !isempty(args) || throw(ArgumentError("@printf: called with no arguments"))
     if isa(args[1], AbstractString) || is_str_expr(args[1])
         _printf("@printf", :STDOUT, args[1], args[2:end])
     else
         (length(args) >= 2 && (isa(args[2], AbstractString) || is_str_expr(args[2]))) ||
-            error("@printf: first or second argument must be a format string")
+            throw(ArgumentError("@printf: first or second argument must be a format string"))
         _printf("@printf", esc(args[1]), args[2], args[3:end])
     end
 end
 
 macro sprintf(args...)
-    !isempty(args) || error("@sprintf: called with zero arguments")
+    !isempty(args) || throw(ArgumentError("@sprintf: called with zero arguments"))
     isa(args[1], AbstractString) || is_str_expr(args[1]) ||
-        error("@sprintf: first argument must be a format string")
+        throw(ArgumentError("@sprintf: first argument must be a format string"))
     blk = _printf("@sprintf", :(IOBuffer()), args[1], args[2:end])
     push!(blk.args, :(takebuf_string(out)))
     blk

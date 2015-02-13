@@ -7,11 +7,54 @@ export srand,
        rand, rand!,
        randn, randn!,
        randexp, randexp!,
-       randbool,
-       AbstractRNG, RNG, MersenneTwister
+       bitrand,
+       AbstractRNG, RNG, MersenneTwister, RandomDevice
 
 
 abstract AbstractRNG
+
+abstract FloatInterval
+type CloseOpen <: FloatInterval end
+type Close1Open2 <: FloatInterval end
+
+
+## RandomDevice
+
+@unix_only begin
+
+    immutable RandomDevice <: AbstractRNG
+        file::IOStream
+
+        RandomDevice(unlimited::Bool=true) = new(open(unlimited ? "/dev/urandom" : "/dev/random"))
+    end
+
+    rand {T<:Union(Bool, Base.IntTypes...)}(rd::RandomDevice,  ::Type{T})  = read( rd.file, T)
+    rand!{T<:Union(Bool, Base.IntTypes...)}(rd::RandomDevice, A::Array{T}) = read!(rd.file, A)
+end
+
+@windows_only begin
+
+    immutable RandomDevice <: AbstractRNG
+        buffer::Vector{UInt128}
+
+        RandomDevice() = new(Array(UInt128, 1))
+    end
+
+    function rand{T<:Union(Bool, Base.IntTypes...)}(rd::RandomDevice, ::Type{T})
+        win32_SystemFunction036!(rd.buffer)
+        @inbounds return rd.buffer[1] % T
+    end
+
+    rand!{T<:Union(Bool, Base.IntTypes...)}(rd::RandomDevice, A::Array{T}) = (win32_SystemFunction036!(A); A)
+end
+
+rand(rng::RandomDevice, ::Type{Close1Open2}) =
+    reinterpret(Float64, 0x3ff0000000000000 | rand(rng, UInt64) & 0x000fffffffffffff)
+
+rand(rng::RandomDevice, ::Type{CloseOpen}) = rand(rng, Close1Open2) - 1.0
+
+
+## MersenneTwister
 
 const MTCacheLength = dsfmt_get_min_array_size()
 
@@ -44,10 +87,6 @@ end
 # precondition: n <= MTCacheLength
 @inline reserve(r::MersenneTwister, n::Int) = mt_avail(r) < n && gen_rand(r)
 
-abstract FloatInterval
-type CloseOpen <: FloatInterval end
-type Close1Open2 <: FloatInterval end
-
 # precondition: !mt_empty(r)
 @inline rand_inbounds(r::MersenneTwister, ::Type{Close1Open2}) = mt_pop!(r)
 @inline rand_inbounds(r::MersenneTwister, ::Type{CloseOpen}) = rand_inbounds(r, Close1Open2) - 1.0
@@ -78,10 +117,8 @@ __init__() = srand()
 # make_seed methods produce values of type Array{UInt32}, suitable for MersenneTwister seeding
 
 function make_seed()
-
-@unix_only begin
     try
-        return make_seed("/dev/urandom", 4)
+        return rand(RandomDevice(), UInt32, 4)
     catch
         println(STDERR, "Entropy pool not available to seed RNG; using ad-hoc entropy sources.")
         seed = reinterpret(UInt64, time())
@@ -91,13 +128,6 @@ function make_seed()
         end
         return make_seed(seed)
     end
-end
-
-@windows_only begin
-    a = zeros(UInt32, 2)
-    win32_SystemFunction036!(a)
-    return a
-end
 end
 
 function make_seed(n::Integer)
@@ -174,9 +204,21 @@ rand(r::AbstractArray, dims::Integer...) = rand(GLOBAL_RNG, r, convert((Int...),
 
 @inline rand(r::AbstractRNG) = rand(r, CloseOpen)
 
-# MersenneTwister
-rand(r::MersenneTwister, ::Type{Float64}) = rand(r, CloseOpen)
-rand{T<:Union(Float16, Float32)}(r::MersenneTwister, ::Type{T}) = convert(T, rand(r, Float64))
+# MersenneTwister & RandomDevice
+@inline rand(r::Union(RandomDevice,MersenneTwister), ::Type{Float64}) = rand(r, CloseOpen)
+rand{T<:Union(Float16, Float32)}(r::Union(RandomDevice,MersenneTwister), ::Type{T}) = convert(T, rand(r, Float64))
+
+rand_ui10_raw(r::MersenneTwister) = rand_ui52_raw(r)
+rand_ui23_raw(r::MersenneTwister) = rand_ui52_raw(r)
+rand_ui10_raw(r::AbstractRNG)    = rand(r, UInt16)
+rand_ui23_raw(r::AbstractRNG)    = rand(r, UInt32)
+
+rand(r::Union(RandomDevice,MersenneTwister), ::Type{Float16}) =
+    Float16(reinterpret(Float32, (rand_ui10_raw(r) % UInt32 << 13) & 0x007fe000 | 0x3f800000) - 1)
+
+rand(r::Union(RandomDevice,MersenneTwister), ::Type{Float32}) =
+    reinterpret(Float32, rand_ui23_raw(r) % UInt32 & 0x007fffff | 0x3f800000) - 1
+
 
 ## random integers
 
@@ -184,7 +226,7 @@ rand{T<:Union(Float16, Float32)}(r::MersenneTwister, ::Type{T}) = convert(T, ran
 
 # MersenneTwister
 
-rand{T<:Union(Bool, Int8, UInt8, Int16, UInt16, Int32, UInt32)}(r::MersenneTwister, ::Type{T}) = rand_ui52_raw(r) % T
+@inline rand{T<:Union(Bool, Int8, UInt8, Int16, UInt16, Int32, UInt32)}(r::MersenneTwister, ::Type{T}) = rand_ui52_raw(r) % T
 
 function rand(r::MersenneTwister, ::Type{UInt64})
     reserve(r, 2)
@@ -378,17 +420,25 @@ end
 RangeGeneratorInt{T, U<:Union(UInt32, UInt128)}(a::T, k::U) = RangeGeneratorInt{T, U}(a, k, maxmultiple(k))
 # mixed 32/64 bits entropy generator
 RangeGeneratorInt{T}(a::T, k::UInt64) = RangeGeneratorInt{T,UInt64}(a, k, maxmultiplemix(k))
-
-
 # generator for ranges
-RangeGenerator{T<:Unsigned}(r::UnitRange{T}) = isempty(r) ? error("range must be non-empty") : RangeGeneratorInt(first(r), last(r) - first(r) + one(T))
+RangeGenerator{T<:Unsigned}(r::UnitRange{T}) = begin
+    if isempty(r)
+        throw(ArgumentError("range must be non-empty"))
+    end
+    RangeGeneratorInt(first(r), last(r) - first(r) + one(T))
+end
 
 # specialized versions
 for (T, U) in [(UInt8, UInt32), (UInt16, UInt32),
                (Int8, UInt32), (Int16, UInt32), (Int32, UInt32), (Int64, UInt64), (Int128, UInt128),
                (Bool, UInt32)]
 
-    @eval RangeGenerator(r::UnitRange{$T}) = isempty(r) ? error("range must be non-empty") : RangeGeneratorInt(first(r), convert($U, unsigned(last(r) - first(r)) + one($U))) # overflow ok
+    @eval RangeGenerator(r::UnitRange{$T}) = begin
+        if isempty(r)
+            throw(ArgumentError("range must be non-empty"))
+        end
+        RangeGeneratorInt(first(r), convert($U, unsigned(last(r) - first(r)) + one($U))) # overflow ok
+    end
 end
 
 if GMP_VERSION.major >= 6
@@ -414,7 +464,7 @@ end
 
 function RangeGenerator(r::UnitRange{BigInt})
     m = last(r) - first(r)
-    m < 0 && error("range must be non-empty")
+    m < 0 && throw(ArgumentError("range must be non-empty"))
     nd = ndigits(m, 2)
     nlimbs, highbits = divrem(nd, 8*sizeof(Limb))
     highbits > 0 && (nlimbs += 1)
@@ -510,16 +560,19 @@ rand(rng::AbstractRNG, r::AbstractArray, dims::Int...) = rand(rng, r, dims)
 
 ## random BitArrays (AbstractRNG)
 
-rand!(r::AbstractRNG, B::BitArray) = Base.bitarray_rand_fill!(r, B)
+function rand!(rng::AbstractRNG, B::BitArray)
+    length(B) == 0 && return B
+    Bc = B.chunks
+    rand!(rng, Bc)
+    Bc[end] &= Base._msk_end(B)
+    return B
+end
 
-randbool(r::AbstractRNG, dims::Dims)   = rand!(r, BitArray(dims))
-randbool(r::AbstractRNG, dims::Int...) = rand!(r, BitArray(dims))
+bitrand(r::AbstractRNG, dims::Dims)   = rand!(r, BitArray(dims))
+bitrand(r::AbstractRNG, dims::Int...) = rand!(r, BitArray(dims))
 
-randbool(dims::Dims)   = rand!(BitArray(dims))
-randbool(dims::Int...) = rand!(BitArray(dims))
-
-randbool(r::AbstractRNG=GLOBAL_RNG) = rand(r, Bool)
-
+bitrand(dims::Dims)   = rand!(BitArray(dims))
+bitrand(dims::Int...) = rand!(BitArray(dims))
 
 ## randn() - Normally distributed random numbers using Ziggurat algorithm
 
@@ -1042,14 +1095,14 @@ function randn_unlikely(rng, idx, rabs, x)
     end
 end
 
-function randn!(rng::AbstractRNG, A::Array{Float64})
+function randn!(rng::AbstractRNG, A::AbstractArray{Float64})
     for i = 1:length(A)
         @inbounds A[i] = randn(rng)
     end
     A
 end
 
-randn!(A::Array{Float64}) = randn!(GLOBAL_RNG, A)
+randn!(A::AbstractArray{Float64}) = randn!(GLOBAL_RNG, A)
 randn(dims::Dims) = randn!(Array(Float64, dims))
 randn(dims::Integer...) = randn!(Array(Float64, dims...))
 randn(rng::AbstractRNG, dims::Dims) = randn!(rng, Array(Float64, dims))
@@ -1107,11 +1160,11 @@ function Base.convert(::Type{UUID}, s::AbstractString)
     s = lowercase(s)
 
     if !ismatch(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$", s)
-        error(ArgumentError("Malformed UUID string"))
+        throw(ArgumentError("Malformed UUID string"))
     end
 
     u = uint128(0)
-    for i in [1:8, 10:13, 15:18, 20:23, 25:36]
+    for i in [1:8; 10:13; 15:18; 20:23; 25:36]
         u <<= 4
         d = s[i]-'0'
         u |= 0xf & (d-39*(d>9))

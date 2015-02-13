@@ -9,7 +9,7 @@ export
 import
     Base: (*), +, -, /, <, <=, ==, >, >=, ^, besselj, besselj0, besselj1, bessely,
         bessely0, bessely1, ceil, cmp, convert, copysign, deg2rad,
-        exp, exp2, exponent, factorial, floor, hypot, isinteger,
+        exp, exp2, exponent, factorial, floor, fma, hypot, isinteger,
         isfinite, isinf, isnan, ldexp, log, log2, log10, max, min, mod, modf,
         nextfloat, prevfloat, promote_rule, rad2deg, rem, round, show,
         showcompact, sum, sqrt, string, print, trunc, precision, exp10, expm1,
@@ -26,7 +26,13 @@ import Base.GMP: ClongMax, CulongMax, CdoubleMax
 
 import Base.Math.lgamma_r
 
-const ROUNDING_MODE = [0]
+function __init__()
+    # set exponent to full range by default
+    set_emin!(get_emin_min())
+    set_emax!(get_emax_max())
+end
+
+const ROUNDING_MODE = Cint[0]
 const DEFAULT_PRECISION = [256]
 
 # Basic type and initialization definitions
@@ -74,7 +80,7 @@ end
 function BigFloat(x::AbstractString, base::Int)
     z = BigFloat()
     err = ccall((:mpfr_set_str, :libmpfr), Int32, (Ptr{BigFloat}, Ptr{UInt8}, Int32, Int32), &z, x, base, ROUNDING_MODE[end])
-    if err != 0; error("incorrectly formatted number"); end
+    err == 0 || throw("incorrectly formatted number \"$x\"")
     return z
 end
 BigFloat(x::AbstractString) = BigFloat(x, 10)
@@ -93,29 +99,32 @@ convert(::Type{BigFloat}, x::Real) = BigFloat(x)
 convert(::Type{FloatingPoint}, x::BigInt) = BigFloat(x)
 
 ## BigFloat -> Integer
-function unsafe_cast(::Type{Int64}, x::BigFloat, r::RoundingMode)
+function unsafe_cast(::Type{Int64}, x::BigFloat, ri::Cint)
     ccall((:__gmpfr_mpfr_get_sj,:libmpfr), Cintmax_t,
-          (Ptr{BigFloat}, Int32), &x, to_mpfr(r))
+          (Ptr{BigFloat}, Cint), &x, ri)
 end
-function unsafe_cast(::Type{UInt64}, x::BigFloat, r::RoundingMode)
+function unsafe_cast(::Type{UInt64}, x::BigFloat, ri::Cint)
     ccall((:__gmpfr_mpfr_get_uj,:libmpfr), Cuintmax_t,
-          (Ptr{BigFloat}, Int32), &x, to_mpfr(r))
+          (Ptr{BigFloat}, Cint), &x, ri)
 end
 
-function unsafe_cast{T<:Signed}(::Type{T}, x::BigFloat, r::RoundingMode)
-    unsafe_cast(Int64, x, r) % T
+function unsafe_cast{T<:Signed}(::Type{T}, x::BigFloat, ri::Cint)
+    unsafe_cast(Int64, x, ri) % T
 end
-function unsafe_cast{T<:Unsigned}(::Type{T}, x::BigFloat, r::RoundingMode)
-    unsafe_cast(UInt64, x, r) % T
+function unsafe_cast{T<:Unsigned}(::Type{T}, x::BigFloat, ri::Cint)
+    unsafe_cast(UInt64, x, ri) % T
 end
 
-function unsafe_cast(::Type{BigInt}, x::BigFloat, r::RoundingMode)
+function unsafe_cast(::Type{BigInt}, x::BigFloat, ri::Cint)
     # actually safe, just keep naming consistent
     z = BigInt()
     ccall((:mpfr_get_z, :libmpfr), Int32, (Ptr{BigInt}, Ptr{BigFloat}, Int32),
-          &z, &x, to_mpfr(r))
+          &z, &x, ri)
     z
 end
+unsafe_cast(::Type{Int128}, x::BigFloat, ri::Cint) = Int128(unsafe_cast(BigInt,x,ri))
+unsafe_cast(::Type{UInt128}, x::BigFloat, ri::Cint) = UInt128(unsafe_cast(BigInt,x,ri))
+unsafe_cast{T<:Integer}(::Type{T}, x::BigFloat, r::RoundingMode) = unsafe_cast(T,x,to_mpfr(r))
 
 unsafe_trunc{T<:Integer}(::Type{T}, x::BigFloat) = unsafe_cast(T,x,RoundToZero)
 
@@ -132,21 +141,21 @@ function ceil{T<:Union(Signed,Unsigned)}(::Type{T}, x::BigFloat)
     unsafe_cast(T,x,RoundUp)
 end
 
+function round{T<:Union(Signed,Unsigned)}(::Type{T}, x::BigFloat)
+    (typemin(T) <= x <= typemax(T)) || throw(InexactError())
+    unsafe_cast(T,x,ROUNDING_MODE[end])
+end
+
 trunc(::Type{BigInt}, x::BigFloat) = unsafe_cast(BigInt, x, RoundToZero)
 floor(::Type{BigInt}, x::BigFloat) = unsafe_cast(BigInt, x, RoundDown)
 ceil(::Type{BigInt}, x::BigFloat) = unsafe_cast(BigInt, x, RoundUp)
+round(::Type{BigInt}, x::BigFloat) = unsafe_cast(BigInt, x, ROUNDING_MODE[end])
+
 # convert/round/trunc/floor/ceil(Integer, x) should return a BigInt
 trunc(::Type{Integer}, x::BigFloat) = trunc(BigInt, x)
 floor(::Type{Integer}, x::BigFloat) = floor(BigInt, x)
 ceil(::Type{Integer}, x::BigFloat) = ceil(BigInt, x)
-
-for Ti in (Int128,UInt128)
-    @eval begin
-        trunc(::Type{$Ti}, x::BigFloat) = ($Ti)(trunc(BigInt, x))
-        floor(::Type{$Ti}, x::BigFloat) = ($Ti)(floor(BigInt, x))
-        ceil(::Type{$Ti}, x::BigFloat) = ($Ti)(ceil(BigInt, x))
-    end
-end
+round(::Type{Integer}, x::BigFloat) = round(BigInt, x)
 
 convert(::Type{Bool}, x::BigFloat) = (x != 0)
 function convert(::Type{BigInt},x::BigFloat)
@@ -165,11 +174,16 @@ convert(::Type{Float64}, x::BigFloat) =
     ccall((:mpfr_get_d,:libmpfr), Float64, (Ptr{BigFloat},Int32), &x, ROUNDING_MODE[end])
 convert(::Type{Float32}, x::BigFloat) =
     ccall((:mpfr_get_flt,:libmpfr), Float32, (Ptr{BigFloat},Int32), &x, ROUNDING_MODE[end])
+# TODO: avoid double rounding
+convert(::Type{Float16}, x::BigFloat) = convert(Float16, convert(Float32, x))
 
 call(::Type{Float64}, x::BigFloat, r::RoundingMode) =
     ccall((:mpfr_get_d,:libmpfr), Float64, (Ptr{BigFloat},Int32), &x, to_mpfr(r))
 call(::Type{Float32}, x::BigFloat, r::RoundingMode) =
     ccall((:mpfr_get_flt,:libmpfr), Float32, (Ptr{BigFloat},Int32), &x, to_mpfr(r))
+# TODO: avoid double rounding
+call(::Type{Float16}, x::BigFloat, r::RoundingMode) =
+    convert(Float16, call(Float32, x, r))
 
 promote_rule{T<:Real}(::Type{BigFloat}, ::Type{T}) = BigFloat
 promote_rule{T<:FloatingPoint}(::Type{BigInt},::Type{T}) = BigFloat
@@ -295,6 +309,12 @@ function -(c::BigInt, x::BigFloat)
     z = BigFloat()
     ccall((:mpfr_z_sub, :libmpfr), Int32, (Ptr{BigFloat}, Ptr{BigInt}, Ptr{BigFloat}, Int32), &z, &c, &x, ROUNDING_MODE[end])
     return z
+end
+
+function fma(x::BigFloat, y::BigFloat, z::BigFloat)
+    r = BigFloat()
+    ccall(("mpfr_fma",:libmpfr), Int32, (Ptr{BigFloat}, Ptr{BigFloat}, Ptr{BigFloat}, Ptr{BigFloat}, Int32), &r, &x, &y, &z, ROUNDING_MODE[end])
+    return r
 end
 
 
@@ -625,11 +645,11 @@ end
 maxintfloat(x::BigFloat) = BigFloat(2)^precision(x)
 maxintfloat(::Type{BigFloat}) = BigFloat(2)^get_bigfloat_precision()
 
-to_mpfr(::RoundingMode{:TiesToEven}) = 0
-to_mpfr(::RoundingMode{:TowardZero}) = 1
-to_mpfr(::RoundingMode{:TowardPositive}) = 2
-to_mpfr(::RoundingMode{:TowardNegative}) = 3
-to_mpfr(::RoundingMode{:AwayFromZero}) = 4
+to_mpfr(::RoundingMode{:Nearest}) = Cint(0)
+to_mpfr(::RoundingMode{:ToZero}) = Cint(1)
+to_mpfr(::RoundingMode{:Up}) = Cint(2)
+to_mpfr(::RoundingMode{:Down}) = Cint(3)
+to_mpfr(::RoundingMode{:FromZero}) = Cint(4)
 
 function from_mpfr(c::Integer)
     if c == 0
@@ -643,7 +663,7 @@ function from_mpfr(c::Integer)
     elseif c == 4
         return RoundFromZero
     else
-        error("invalid MPFR rounding mode code")
+        throw(ArgumentError("invalid MPFR rounding mode code: $c"))
     end
     RoundingMode(c)
 end
@@ -687,7 +707,7 @@ function isinteger(x::BigFloat)
     return ccall((:mpfr_integer_p, :libmpfr), Int32, (Ptr{BigFloat},), &x) != 0
 end
 
-for f in (:ceil, :floor, :trunc, :round)
+for f in (:ceil, :floor, :trunc)
     @eval begin
         function ($f)(x::BigFloat)
             z = BigFloat()
@@ -695,6 +715,17 @@ for f in (:ceil, :floor, :trunc, :round)
             return z
         end
     end
+end
+
+function round(x::BigFloat)
+    z = BigFloat()
+    ccall((:mpfr_rint, :libmpfr), Int32, (Ptr{BigFloat}, Ptr{BigFloat}, Cint), &z, &x, ROUNDING_MODE[end])
+    return z
+end
+function round(x::BigFloat,::RoundingMode{:NearestTiesAway})
+    z = BigFloat()
+    ccall((:mpfr_round, :libmpfr), Int32, (Ptr{BigFloat}, Ptr{BigFloat}), &z, &x)
+    return z
 end
 
 function isinf(x::BigFloat)
@@ -755,5 +786,17 @@ end
 print(io::IO, b::BigFloat) = print(io, string(b))
 show(io::IO, b::BigFloat) = print(io, string(b), " with $(precision(b)) bits of precision")
 showcompact(io::IO, b::BigFloat) = print(io, string(b))
+
+# get/set exponent min/max
+get_emax() = ccall((:mpfr_get_emax, :libmpfr), Clong, ())
+get_emax_min() = ccall((:mpfr_get_emax_min, :libmpfr), Clong, ())
+get_emax_max() = ccall((:mpfr_get_emax_max, :libmpfr), Clong, ())
+
+get_emin() = ccall((:mpfr_get_emin, :libmpfr), Clong, ())
+get_emin_min() = ccall((:mpfr_get_emin_min, :libmpfr), Clong, ())
+get_emin_max() = ccall((:mpfr_get_emin_max, :libmpfr), Clong, ())
+
+set_emax!(x) = ccall((:mpfr_set_emax, :libmpfr), Void, (Clong,), x)
+set_emin!(x) = ccall((:mpfr_set_emin, :libmpfr), Void, (Clong,), x)
 
 end #module

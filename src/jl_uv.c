@@ -508,7 +508,7 @@ DLLEXPORT int jl_fs_close(int handle)
 }
 
 //units are in ms
-DLLEXPORT int jl_puts(char *str, uv_stream_t *stream)
+DLLEXPORT int jl_puts(const char *str, uv_stream_t *stream)
 {
     if (!stream) return 0;
     return jl_write(stream,str,strlen(str));
@@ -531,7 +531,7 @@ DLLEXPORT void jl_uv_writecb_task(uv_write_t *req, int status)
 DLLEXPORT int jl_write_copy(uv_stream_t *stream, const char *str, size_t n, uv_write_t *uvw, void *writecb)
 {
     JL_SIGATOMIC_BEGIN();
-    char *data = (char*)(uvw+1);
+    char *data = (char*)uvw+sizeof(*uvw);
     memcpy(data,str,n);
     uv_buf_t buf[1];
     buf[0].base = data;
@@ -686,14 +686,10 @@ char *jl_bufptr(ios_t *s)
     return s->buf;
 }
 
-DLLEXPORT void uv_atexit_hook();
 DLLEXPORT void jl_exit(int exitcode)
 {
-    /*if (jl_io_loop) {
-        jl_process_events(&jl_io_loop);
-    }*/
     uv_tty_reset_mode();
-    uv_atexit_hook();
+    jl_atexit_hook();
     exit(exitcode);
 }
 

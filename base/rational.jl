@@ -3,7 +3,7 @@ immutable Rational{T<:Integer} <: Real
     den::T
 
     function Rational(num::T, den::T)
-        num == den == 0 && error("invalid rational: 0//0")
+        num == den == zero(T) && throw(ArgumentError("invalid rational: zero($T)//zero($T)"))
         g = den < 0 ? -gcd(den, num) : gcd(den, num)
         new(div(num, g), div(den, g))
     end
@@ -176,31 +176,81 @@ end
 /(x::Rational, y::Rational) = x//y
 /(x::Rational, z::Complex ) = inv(z/x)
 
+fma(x::Rational, y::Rational, z::Rational) = x*y+z
+
 ==(x::Rational, y::Rational) = (x.den == y.den) & (x.num == y.num)
+< (x::Rational, y::Rational) = x.den == y.den ? x.num < y.num :
+                               widemul(x.num,y.den) < widemul(x.den,y.num)
+<=(x::Rational, y::Rational) = x.den == y.den ? x.num <= y.num :
+                               widemul(x.num,y.den) <= widemul(x.den,y.num)
+
+
 ==(x::Rational, y::Integer ) = (x.den == 1) & (x.num == y)
 ==(x::Integer , y::Rational) = y == x
+< (x::Rational, y::Integer ) = x.num < widemul(x.den,y)
+< (x::Integer , y::Rational) = widemul(x,y.den) < y.num
+<=(x::Rational, y::Integer ) = x.num <= widemul(x.den,y)
+<=(x::Integer , y::Rational) = widemul(x,y.den) <= y.num
+
+function ==(x::FloatingPoint, q::Rational)
+    if isfinite(x)
+        (count_ones(q.den) == 1) & (x*q.den == q.num)
+    else
+        x == q.num/q.den
+    end
+end
+
+==(q::Rational, x::FloatingPoint) = x == q
+
+for rel in (:<,:<=,:cmp)
+    for (Tx,Ty) in ((Rational,FloatingPoint), (FloatingPoint,Rational))
+        @eval function ($rel)(x::$Tx, y::$Ty)
+            if isnan(x) || isnan(y)
+                $(rel == :cmp ? :(throw(DomainError())) : :(return false))
+            end
+
+            xn, xp, xd = decompose(x)
+            yn, yp, yd = decompose(y)
+
+            if xd < 0
+                xn = -xn
+                xd = -xd
+            end
+            if yd < 0
+                yn = -yn
+                yd = -yd
+            end
+
+            xc, yc = widemul(xn,yd), widemul(yn,xd)
+            xs, ys = sign(xc), sign(yc)
+
+            if xs != ys
+                return ($rel)(xs,ys)
+            elseif xs == 0
+                # both are zero or ±Inf
+                return ($rel)(xn,yn)
+            end
+
+            xb, yb = ndigits0z(xc,2) + xp, ndigits0z(yc,2) + yp
+
+            if xb == yb
+                xc, yc = promote(xc,yc)
+                if xp > yp
+                    xc = (xc<<(xp-yp))
+                else
+                    yc = (yc<<(yp-xp))
+                end
+                return ($rel)(xc,yc)
+            else
+                return xc > 0 ? ($rel)(xb,yb) : ($rel)(yb,xb)
+            end
+        end
+    end
+end
 
 # needed to avoid ambiguity between ==(x::Real, z::Complex) and ==(x::Rational, y::Number)
 ==(z::Complex , x::Rational) = isreal(z) & (real(z) == x)
 ==(x::Rational, z::Complex ) = isreal(z) & (real(z) == x)
-
-==(x::FloatingPoint, q::Rational) = count_ones(q.den) <= 1 & (x == q.num/q.den) & (x*q.den == q.num)
-==(q::Rational, x::FloatingPoint) = count_ones(q.den) <= 1 & (x == q.num/q.den) & (x*q.den == q.num)
-
-# TODO: fix inequalities to be in line with equality check
-< (x::Rational, y::Rational) = x.den == y.den ? x.num < y.num :
-                               widemul(x.num,y.den) < widemul(x.den,y.num)
-< (x::Rational, y::Integer ) = x.num < widemul(x.den,y)
-< (x::Rational, y::Real    ) = x.num < x.den*y
-< (x::Integer , y::Rational) = widemul(x,y.den) < y.num
-< (x::Real    , y::Rational) = x*y.den < y.num
-
-<=(x::Rational, y::Rational) = x.den == y.den ? x.num <= y.num :
-                               widemul(x.num,y.den) <= widemul(x.den,y.num)
-<=(x::Rational, y::Integer ) = x.num <= widemul(x.den,y)
-<=(x::Rational, y::Real    ) = x.num <= x.den*y
-<=(x::Integer , y::Rational) = widemul(x,y.den) <= y.num
-<=(x::Real    , y::Rational) = x*y.den <= y.num
 
 for op in (:div, :fld, :cld)
     @eval begin
@@ -220,13 +270,25 @@ for op in (:div, :fld, :cld)
     end
 end
 
-trunc{T<:Integer}(::Type{T}, x::Rational) = convert(T,div(x.num,x.den))
-floor{T<:Integer}(::Type{T}, x::Rational) = convert(T,fld(x.num,x.den))
-ceil {T<:Integer}(::Type{T}, x::Rational) = convert(T,cld(x.num,x.den))
-function round{T<:Integer}(::Type{T}, x::Rational)
-    t = trunc(T,x)
-    r = x-t
-    abs(r.num) > (r.den-one(r.den))>>1 ? t + copysign(one(t),x) : t
+trunc{T}(::Type{T}, x::Rational) = convert(T,div(x.num,x.den))
+floor{T}(::Type{T}, x::Rational) = convert(T,fld(x.num,x.den))
+ceil {T}(::Type{T}, x::Rational) = convert(T,cld(x.num,x.den))
+
+function round{T}(::Type{T}, x::Rational, ::RoundingMode{:Nearest})
+    q,r = divrem(x.num,x.den)
+    s = abs(r) < (x.den+one(x.den)+iseven(q))>>1 ? q : q+copysign(one(q),x.num)
+    convert(T,s)
+end
+round{T}(::Type{T}, x::Rational) = round(T,x,RoundNearest)
+function round{T}(::Type{T}, x::Rational, ::RoundingMode{:NearestTiesAway})
+    q,r = divrem(x.num,x.den)
+    s = abs(r) < (x.den+one(x.den))>>1 ? q : q+copysign(one(q),x.num)
+    convert(T,s)
+end
+function round{T}(::Type{T}, x::Rational, ::RoundingMode{:NearestTiesUp})
+    q,r = divrem(x.num,x.den)
+    s = abs(r) < (x.den+one(x.den)+(x.num<0))>>1 ? q : q+copysign(one(q),x.num)
+    convert(T,s)
 end
 
 trunc{T}(x::Rational{T}) = Rational(trunc(T,x))

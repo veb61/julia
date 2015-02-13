@@ -21,7 +21,7 @@ function generic_scale!(X::AbstractArray, s::Number)
 end
 
 function generic_scale!(C::AbstractArray, X::AbstractArray, s::Number)
-    length(C) == length(X) || error("C must be the same length as X")
+    length(C) == length(X) || throw(DimensionMismatch("first array argument must be the same length as the second array argument"))
     for i = 1:length(X)
         @inbounds C[i] = X[i]*s
     end
@@ -45,14 +45,16 @@ diff(a::AbstractVector) = [ a[i+1] - a[i] for i=1:length(a)-1 ]
 function diff(A::AbstractMatrix, dim::Integer)
     if dim == 1
         [A[i+1,j] - A[i,j] for i=1:size(A,1)-1, j=1:size(A,2)]
-    else
+    elseif dim == 2
         [A[i,j+1] - A[i,j] for i=1:size(A,1), j=1:size(A,2)-1]
+    else
+        throw(ArgumentError("dimension dim must be 1 or 2, got $dim"))
     end
 end
 
 
-gradient(F::AbstractVector) = gradient(F, [1:length(F)])
-gradient(F::AbstractVector, h::Real) = gradient(F, [h*(1:length(F))])
+gradient(F::AbstractVector) = gradient(F, [1:length(F);])
+gradient(F::AbstractVector, h::Real) = gradient(F, [h*(1:length(F));])
 
 diag(A::AbstractVector) = error("use diagm instead of diag to construct a diagonal matrix")
 
@@ -238,7 +240,7 @@ end
 function \{TA,TB}(A::AbstractMatrix{TA}, B::AbstractVecOrMat{TB})
     TC = typeof(one(TA)/one(TB))
     size(A,1) == size(B,1) || throw(DimensionMismatch("LHS and RHS should have the same number of rows. LHS has $(size(A,1)) rows, but RHS has $(size(B,1)) rows."))
-    A_ldiv_B!(factorize(TA == TC ? copy(A) : convert(AbstractMatrix{TC}, A)), TB == TC ? copy(B) : convert(AbstractArray{TC}, B))
+    \(factorize(TA == TC ? A : convert(AbstractMatrix{TC}, A)), TB == TC ? copy(B) : convert(AbstractArray{TC}, B))
 end
 \(a::AbstractVector, b::AbstractArray) = reshape(a, length(a), 1) \ b
 /(A::AbstractVecOrMat, B::AbstractVecOrMat) = (B' \ A')'
@@ -326,8 +328,6 @@ scale!(b::AbstractVector, A::AbstractMatrix) = scale!(A,b,A)
 
 #findmax(a::AbstractArray)
 #findmin(a::AbstractArray)
-
-#rref{T}(A::AbstractMatrix{T})
 
 function peakflops(n::Integer=2000; parallel::Bool=false)
     a = rand(100,100)
@@ -424,7 +424,7 @@ function elementaryRightTrapezoid!(A::AbstractMatrix, row::Integer)
 end
 
 function det(A::AbstractMatrix)
-    (istriu(A) || istril(A)) && return det(Triangular(A, :U, false))
+    (istriu(A) || istril(A)) && return det(UpperTriangular(A))
     return det(lufact(A))
 end
 det(x::Number) = x

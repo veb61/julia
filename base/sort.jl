@@ -54,7 +54,7 @@ issorted(itr;
     issorted(itr, ord(lt,by,rev,order))
 
 function select!(v::AbstractVector, k::Int, lo::Int, hi::Int, o::Ordering)
-    lo <= k <= hi || error("select index $k is out of range $lo:$hi")
+    lo <= k <= hi || throw(ArgumentError("select index $k is out of range $lo:$hi"))
     @inbounds while lo < hi
         if hi-lo == 1
             if lt(o, v[hi], v[lo])
@@ -85,7 +85,7 @@ end
 function select!(v::AbstractVector, r::OrdinalRange, lo::Int, hi::Int, o::Ordering)
     isempty(r) && (return v[r])
     a, b = extrema(r)
-    lo <= a <= b <= hi || error("selection $r is out of range $lo:$hi")
+    lo <= a <= b <= hi || throw(ArgumentError("selection $r is out of range $lo:$hi"))
     @inbounds while true
         if lo == a && hi == b
             sort!(v, lo, hi, DEFAULT_UNSTABLE, o)
@@ -207,6 +207,22 @@ function searchsortedfirst{T<:Integer}(a::Range{T}, x::Real, o::DirectOrdering)
         lt(o, first(a), x) ? length(a)+1 : 1
     else
         max(min(-fld(floor(Integer,-x)+first(a),step(a))+1,length(a)+1),1)
+    end
+end
+
+function searchsortedfirst{T<:Integer}(a::Range{T}, x::Unsigned, o::DirectOrdering)
+    if step(a) == 0
+        lt(o, first(a), x) ? length(a)+1 : 1
+    else
+        max(min(-fld(first(a)-signed(x),step(a))+1,length(a)+1),1)
+    end
+end
+
+function searchsortedlast{T<:Integer}(a::Range{T}, x::Unsigned, o::DirectOrdering)
+    if step(a) == 0
+        lt(o, x, first(a)) ? 0 : length(a)
+    else
+        max(min(fld(signed(x)-first(a),step(a))+1,length(a)),0)
     end
 end
 
@@ -349,7 +365,7 @@ sort(v::AbstractVector; kws...) = sort!(copy(v); kws...)
 
 sortperm(v::AbstractVector; alg::Algorithm=DEFAULT_UNSTABLE,
     lt::Function=isless, by::Function=identity, rev::Bool=false, order::Ordering=Forward) =
-    sort!([1:length(v)], alg, Perm(ord(lt,by,rev,order),v))
+    sort!([1:length(v);], alg, Perm(ord(lt,by,rev,order),v))
 
 function sortperm!{I<:Integer}(x::Vector{I}, v::AbstractVector; alg::Algorithm=DEFAULT_UNSTABLE,
                                lt::Function=isless, by::Function=identity, rev::Bool=false, order::Ordering=Forward,

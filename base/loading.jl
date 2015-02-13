@@ -10,7 +10,7 @@ function find_in_path(name::AbstractString)
         name = string(base,".jl")
         isfile(name) && return abspath(name)
     end
-    for prefix in [Pkg.dir(), LOAD_PATH]
+    for prefix in [Pkg.dir(); LOAD_PATH]
         path = joinpath(prefix, name)
         isfile(path) && return abspath(path)
         path = joinpath(prefix, base, "src", name)
@@ -44,7 +44,7 @@ toplevel_load = true
 
 function require(name::AbstractString)
     path = find_in_node1_path(name)
-    path == nothing && error("$name not found")
+    path == nothing && throw(ArgumentError("$name not found in path"))
 
     if myid() == 1 && toplevel_load
         refs = Any[ @spawnat p _require(path) for p in filter(x->x!=1, procs()) ]
@@ -74,7 +74,7 @@ end
 function reload(name::AbstractString)
     global toplevel_load
     path = find_in_node1_path(name)
-    path == nothing && error("$name not found")
+    path == nothing && throw(ArgumentError("$name not found in path"))
     refs = nothing
     if myid() == 1 && toplevel_load
         refs = Any[ @spawnat p reload_path(path) for p in filter(x->x!=1, procs()) ]

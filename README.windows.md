@@ -15,7 +15,7 @@ Instructions for adding fonts to the terminal are available at:
 
 Additionally, rather than sticking with the default command prompt, you may want to use a different terminal emulator program, such as [`Conemu`](https://code.google.com/p/conemu-maximus5/) or [`Mintty`](https://code.google.com/p/mintty/)
 (note that running Julia on Mintty needs a copy of `stty.exe` in your `%PATH%` to work properly).
-Alternatively, you may prefer the features of a more full-function IDE, such as [`LightTable`](https://github.com/one-more-minute/Jupiter-LT), [`Sublime-IJulia`](https://github.com/quinnj/Sublime-IJulia), or [`IJulia`](https://github.com/JuliaLang/IJulia.jl).
+Alternatively, you may prefer the features of a more full-function IDE, such as [`Juno`](http://junolab.org), [`LightTable`](https://github.com/one-more-minute/Jupiter-LT), [`Sublime-IJulia`](https://github.com/quinnj/Sublime-IJulia), or [`IJulia`](https://github.com/JuliaLang/IJulia.jl).
 
 
 # Binary distribution
@@ -37,9 +37,9 @@ Julia uses binary-mode files exclusively. Unlike many other Windows programs, if
 
     git config --global core.eol lf
     git config --global core.autocrlf input
-    
+
 or edit `%USERPROFILE%\.gitconfig` and add/edit the lines:
-    
+
     [core] eol = lf
            autocrlf = input
 
@@ -47,11 +47,11 @@ or edit `%USERPROFILE%\.gitconfig` and add/edit the lines:
 # Source distribution
 
 ## Supported build platforms
-
+- Windows 10: supported (32 and 64 bits)
 - Windows 8: supported (32 and 64 bits)
 - Windows 7: supported (32 and 64 bits)
-- Windows Vista: unknown
-- Windows XP: not supported (however, there have been some reports of success following the msys2 steps)
+- Windows Vista: not officially supported (but probably works anyways)
+- Windows XP: not officially supported (but may work anyways)
 
 ## Compiling with MinGW/MSYS2
 
@@ -198,16 +198,10 @@ Julia can be also compiled from source in [Cygwin](http://www.cygwin.com), using
     make -j 4   # Adjust the number of cores (4) to match your build environment.
 ```
 
-7. Run Julia with _either_ of:
-  - Using `make`
+7. Run Julia using the Julia executables directly
     ```
-    make run-julia
-   ```
-   (the full syntax is `make run-julia[-release|-debug]`)
-
-  - Using the Julia executables directly
-    ```
-    usr/bin/julia
+    usr/bin/julia.exe
+    usr/bin/julia-debug.exe
 ```
 
 ## Cross-compiling from Unix
@@ -295,7 +289,7 @@ If you are building for 64-bit windows, the steps are essentially the same. Just
 
 ### Build process is slow/eats memory/hangs my computer
 
-- Disable the Windows [Superfetch](http://en.wikipedia.org/wiki/Windows_Vista_I/O_technologies#SuperFetch) and 
+- Disable the Windows [Superfetch](http://en.wikipedia.org/wiki/Windows_Vista_I/O_technologies#SuperFetch) and
   [Program Compatibility Assistant](http://blogs.msdn.com/b/cjacks/archive/2011/11/22/managing-the-windows-7-program-compatibility-assistant-pca.aspx) services, as they are known to have
   [spurious interactions]((https://cygwin.com/ml/cygwin/2011-12/msg00058.html)) with MinGW/Cygwin.
 

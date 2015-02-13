@@ -319,7 +319,7 @@ function clotest()
     @test (()->c)() == 1
 
     fibb(n) = n < 2 ? n : fibb(n-1)+fibb(n-2)
-    assert(fibb(10)==55)
+    @test fibb(10) == 55
 
     return (n->(c+=n), ()->c)
 end
@@ -502,6 +502,16 @@ begin
     @test is(g(a),a)
 end
 
+# dispatch using Val{T}. See discussion in #9452 for instances vs types
+begin
+    local firstlast
+    firstlast(::Type{Val{true}}) = "First"
+    firstlast(::Type{Val{false}}) = "Last"
+
+    @test firstlast(Val{true}) == "First"
+    @test firstlast(Val{false}) == "Last"
+end
+
 # try/finally
 begin
     after = 0
@@ -547,6 +557,8 @@ begin
     end
     @test retfinally() == 5
     @test glo == 18
+
+    @test try error() end === nothing
 end
 
 # finalizers
@@ -710,6 +722,24 @@ begin
     @test typeof(b) === SI{1,-2,1}
 end
 
+# pointer arithmetic
+begin
+   local a,b,c
+   a = C_NULL
+   b = C_NULL + 1
+   c = C_NULL - 1
+
+   @test a != b != c
+   @test UInt(a) == 0
+   @test UInt(b) == 1
+   @test UInt(c) == typemax(UInt)
+
+   @test b - a == -(a - b) == 1
+   @test c - a == -(a - c) == typemax(UInt)
+   @test c - b == -(b - c) == typemax(UInt) - 1
+   @test a < b < c
+end
+
 # pull request 1270
 begin
     local a,p, a2,p2
@@ -827,15 +857,15 @@ end
 let
     tst = 1
     m1(i) = (tst+=1;i-1)
-    x = [1:4]
+    x = [1:4;]
     x[1:end] *= 2
-    @test x == [2:2:8]
+    @test x == [2:2:8;]
     x[m1(end)] += 3
     @test x == [2,4,9,8]
     @test tst == 2
 
     # issue #1886
-    X = [1:4]
+    X = [1:4;]
     r = Array(UnitRange{Int},1)
     r[1] = 2:3
     X[r...] *= 2
@@ -885,7 +915,7 @@ end
 let
     i2098() = begin
         c = Any[2.0]
-        [1:1:c[1]]
+        [1:1:c[1];]
     end
     @test isequal(i2098(), [1.0,2.0])
 end
@@ -1974,3 +2004,142 @@ function f9134()
     end
 end
 @test_throws UndefVarError f9134()
+
+# issue #9475
+module I9475
+    arr = Array(Any, 1)
+    @eval @eval $arr[1] = 1
+end
+
+# issue #9520
+#f9520a(::Any, ::Any, args...) = 15
+#f9520b(::Any, ::Any, ::Any, args...) = 23
+#f9520c(::Any, ::Any, ::Any, ::Any, ::Any, ::Any, args...) = 46
+#@test invoke(f9520a, (Any, Any), 1, 2) == 15
+#@test invoke(f9520a, (Any, Any, Any), 1, 2, 3) == 15
+#@test invoke(f9520b, (Any, Any, Any), 1, 2, 3) == 23
+#@test invoke(f9520b, (Any, Any, Any, Any, Any, Any), 1, 2, 3, 4, 5, 6) == 23
+#@test invoke(f9520c, (Any, Any, Any, Any, Any, Any), 1, 2, 3, 4, 5, 6) == 46
+#@test invoke(f9520c, (Any, Any, Any, Any, Any, Any, Any), 1, 2, 3, 4, 5, 6, 7) == 46
+
+# jl_new_bits testing
+let x = [1,2,3]
+    @test ccall(:jl_new_bits, Any, (Any,Ptr{Void},), Int, x) === 1
+    @test ccall(:jl_new_bits, Any, (Any,Ptr{Void},), Complex{Int}, x) === 1+2im
+    @test ccall(:jl_new_bits, Any, (Any,Ptr{Void},), NTuple{3,Int}, x) === (1,2,3)
+    @test ccall(:jl_new_bits, Any, (Any,Ptr{Void},), (Int,Int,Int), x) === (1,2,3)
+    @test (ccall(:jl_new_bits, Any, (Any,Ptr{Void},), (Int16,(Void,),Int8,(),Int,Void,Int), x)::Tuple)[[2,4,5,6,7]] === ((nothing,),(),2,nothing,3)
+end
+
+# sig 2 is SIGINT per the POSIX.1-1990 standard
+#if Base.is_unix(OS_NAME)
+#    ccall(:jl_exit_on_sigint, Void, (Cint,), 0)
+#    @test_throws InterruptException ccall(:raise, Void, (Cint,), 2)
+#    ccall(:jl_exit_on_sigint, Void, (Cint,), 1)
+#end
+#XXX: test disabled since we may be getting this signal on any of our threads
+# (very bad), leading to segfaults. perhaps needs to switch to a multi-threading aware
+# sigwait-based handler?
+
+# pull request #9534
+@test try; a,b,c = 1,2; catch ex; (ex::BoundsError).a === (1,2) && ex.i == 3; end
+@test try; [][]; catch ex; isempty((ex::BoundsError).a::Array{Any,1}) && ex.i == (1,); end
+@test try; [][1,2]; catch ex; isempty((ex::BoundsError).a::Array{Any,1}) && ex.i == (1,2); end
+@test try; [][10]; catch ex; isempty((ex::BoundsError).a::Array{Any,1}) && ex.i == (10,); end
+f9534a() = (a=1+2im; a.(-100))
+f9534a(x) = (a=1+2im; a.(x))
+@test try; f9534a() catch ex; (ex::BoundsError).a === 1+2im && ex.i == -100; end
+@test try; f9534a(3) catch ex; (ex::BoundsError).a === 1+2im && ex.i == 3; end
+f9534b() = (a=(1,2.,""); a[5])
+f9534b(x) = (a=(1,2.,""); a[x])
+@test try; f9534b() catch ex; (ex::BoundsError).a == (1,2.,"") && ex.i == 5; end
+@test try; f9534b(4) catch ex; (ex::BoundsError).a == (1,2.,"") && ex.i == 4; end
+f9534c() = (a=(1,2.); a[3])
+f9534c(x) = (a=(1,2.); a[x])
+@test try; f9534c() catch ex; (ex::BoundsError).a === (1,2.) && ex.i == 3; end
+@test try; f9534c(0) catch ex; (ex::BoundsError).a === (1,2.) && ex.i == 0; end
+f9534d() = (a=(1,2,4,6,7); a[7])
+f9534d(x) = (a=(1,2,4,6,7); a[x])
+@test try; f9534d() catch ex; (ex::BoundsError).a === (1,2,4,6,7) && ex.i == 7; end
+@test try; f9534d(-1) catch ex; (ex::BoundsError).a === (1,2,4,6,7) && ex.i == -1; end
+f9534e(x) = (a=IOBuffer(); a.(x) = 3)
+@test try; f9534e(-2) catch ex; is((ex::BoundsError).a,IOBuffer) && ex.i == -2; end
+f9534f() = (a=IOBuffer(); a.(-2))
+f9534f(x) = (a=IOBuffer(); a.(x))
+@test try; f9534f() catch ex; isa((ex::BoundsError).a,IOBuffer) && ex.i == -2; end
+@test try; f9534f(typemin(Int)+2) catch ex; isa((ex::BoundsError).a,IOBuffer) && ex.i == typemin(Int)+2; end
+x9634 = 3
+@test try; getfield(1+2im, x9634); catch ex; (ex::BoundsError).a === 1+2im && ex.i == 3; end
+@test try; throw(BoundsError()) catch ex; !isdefined((ex::BoundsError), :a) && !isdefined((ex::BoundsError), :i); end
+@test try; throw(BoundsError(Int)) catch ex; (ex::BoundsError).a == Int && !isdefined((ex::BoundsError), :i); end
+@test try; throw(BoundsError(Int, typemin(Int))) catch ex; (ex::BoundsError).a == Int && (ex::BoundsError).i == typemin(Int); end
+@test try; throw(BoundsError(Int, (:a,))) catch ex; (ex::BoundsError).a == Int && (ex::BoundsError).i == (:a,); end
+f9534g(a,b,c...) = c[0]
+@test try; f9534g(1,2,3,4,5,6) catch ex; (ex::BoundsError).a === (3,4,5,6) && ex.i == 0; end
+f9534h(a,b,c...) = c[a]
+@test f9534h(4,2,3,4,5,6) == 6
+@test try; f9534h(5,2,3,4,5,6) catch ex; (ex::BoundsError).a === (3,4,5,6) && ex.i == 5; end
+
+# issue #9535
+counter9535 = 0
+f9535() = (global counter9535; counter9535 += 1; counter9535)
+g9535() = (f9535(),f9535())
+@test g9535() == (1,2)
+@test g9535() == (3,4)
+
+# issue #9617
+let p = 15
+    @test 2p+1 == 31  # not a hex float literal
+end
+@test_throws ParseError parse("0x0.1")  # must have p or P
+
+# weak references
+type Obj; x; end
+function mk_wr(r, wr)
+    x = Obj(1)
+    push!(r, x)
+    push!(wr, WeakRef(x))
+end
+test_wr(r,wr) = @test r[1] == wr[1].value
+function test_wr()
+    ref = []
+    wref = []
+    mk_wr(ref, wref)
+    test_wr(ref, wref)
+    gc()
+    test_wr(ref, wref)
+    pop!(ref)
+    gc()
+    @test wref[1].value == nothing
+end
+test_wr()
+
+# issue #9947
+function f9947()
+    if 1 == 0
+        1
+    else
+        min(UInt128(2),1)
+    end
+end
+@test f9947() == UInt128(1)
+
+# Type inference for tuple parameters
+immutable fooTuple{s}; end
+barTuple1() = fooTuple{(:y,)}()
+barTuple2() = fooTuple{tuple(:y)}()
+
+@test Base.return_types(barTuple1,())[1] == Base.return_types(barTuple2,())[1] == fooTuple{(:y,)}
+
+#issue #9835
+module M9835
+    using Base.Test
+    type A end; type B end
+    f() = (isa(A(), A) ? A : B)()
+    @test isa(f(), A)
+end
+
+#issue #10163
+let a = :(()), b = :(())
+    @test a.args !== b.args
+end

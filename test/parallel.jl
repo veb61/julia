@@ -1,8 +1,8 @@
 # NOTE: worker processes cannot add more workers, only the client process can.
 require("testdefs.jl")
 
-if nprocs() < 3
-    remotecall_fetch(1, () -> addprocs(2))
+if nworkers() < 3
+    remotecall_fetch(1, () -> addprocs(3))
 end
 
 id_me = myid()
@@ -13,6 +13,12 @@ id_other = filter(x -> x != id_me, procs())[rand(1:(nprocs()-1))]
 @fetch begin myid() end
 
 d = drand((200,200), [id_me, id_other])
+dc = copy(d)
+
+@test d == dc                                           # Should be identical
+@spawnat id_other localpart(dc)[1] = 0
+@test fetch(@spawnat id_other localpart(d)[1] != 0) # but not point to the same memory
+
 s = convert(Matrix{Float64}, d[1:150, 1:150])
 a = convert(Matrix{Float64}, d)
 @test a[1:150,1:150] == s
@@ -20,7 +26,7 @@ a = convert(Matrix{Float64}, d)
 @test fetch(@spawnat id_me localpart(d)[1,1]) == d[1,1]
 @test fetch(@spawnat id_other localpart(d)[1,1]) == d[1,101]
 
-d=DArray(I->fill(myid(), map(length,I)), (10,10), [id_me, id_other])
+d = DArray(I->fill(myid(), map(length,I)), (10,10), [id_me, id_other])
 d2 = map(x->1, d)
 @test reduce(+, d2) == 100
 
@@ -28,16 +34,50 @@ d2 = map(x->1, d)
 map!(x->1, d)
 @test reduce(+, d) == 100
 
+# Test mapreduce on DArrays
+begin
+    # Test that the proper method exists on DArrays
+    sig = methods(mapreduce, (Function, Function, DArray))[1].sig
+    @test sig[3] == DArray
+
+    # Test that it is functionally equivalent to the standard method
+    for _ = 1:25, f = [x -> 2x, x -> x^2, x -> x^2 + 2x - 1], opt = [+, *]
+        n = rand(2:50)
+        arr = rand(1:100, n)
+        darr = distribute(arr)
+
+        @test mapreduce(f, opt, arr) == mapreduce(f, opt, darr)
+    end
+end
+
+# Test mapreducedim on DArrays
+@test mapreducedim(t -> t*t, +, d2, 1) == mapreducedim(t -> t*t, +, convert(Array, d2), 1)
+@test mapreducedim(t -> t*t, +, d2, 2) == mapreducedim(t -> t*t, +, convert(Array, d2), 2)
+@test mapreducedim(t -> t*t, +, d2, (1,2)) == mapreducedim(t -> t*t, +, convert(Array, d2), (1,2))
 
 dims = (20,20,20)
 
+d = drandn(dims)
+da = convert(Array, d)
+for dms in (1, 2, 3, (1,2), (1,3), (2,3), (1,2,3))
+    @test_approx_eq mapreducedim(t -> t*t, +, d, dms) mapreducedim(t -> t*t, +, da, dms)
+    @test_approx_eq mapreducedim(t -> t*t, +, d, dms, 1.0) mapreducedim(t -> t*t, +, da, dms, 1.0)
+
+    @test_approx_eq reducedim(*, d, dms) reducedim(*, da, dms)
+    @test_approx_eq reducedim(*, d, dms, 2.0) reducedim(*, da, dms, 2.0)
+
+    # statistical function (works generically through calls to mapreducedim!, i.e. not implemented specifically for DArrays)
+    @test_approx_eq mean(d, dms) mean(da, dms)
+    # @test_approx_eq std(d, dms) std(da, dms) Requires centralize_sumabs2! for DArrays
+end
+
 @linux_only begin
     S = SharedArray(Int64, dims)
-    @test beginswith(S.segname, "/jl")
+    @test startswith(S.segname, "/jl")
     @test !ispath("/dev/shm" * S.segname)
 
     S = SharedArray(Int64, dims; pids=[id_other])
-    @test beginswith(S.segname, "/jl")
+    @test startswith(S.segname, "/jl")
     @test !ispath("/dev/shm" * S.segname)
 end
 
@@ -107,7 +147,7 @@ d[5,1:2:4,8] = 19
 AA = rand(4,2)
 A = convert(SharedArray, AA)
 B = convert(SharedArray, AA')
-@test B*A == AA'*AA
+@test B*A == ctranspose(AA)*AA
 
 d=SharedArray(Int64, (10,10); init = D->fill!(D.loc_subarr_1d, myid()), pids=[id_me, id_other])
 d2 = map(x->1, d)
@@ -117,6 +157,9 @@ d2 = map(x->1, d)
 map!(x->1, d)
 @test reduce(+, d) == 100
 
+@test fill!(d, 1) == ones(10, 10)
+@test fill!(d, 2.) == fill(2, 10, 10)
+
 # Boundary cases where length(S) <= length(pids)
 @test 2.0 == remotecall_fetch(id_other, D->D[2], Base.shmem_fill(2.0, 2; pids=[id_me, id_other]))
 @test 3.0 == remotecall_fetch(id_other, D->D[1], Base.shmem_fill(3.0, 1; pids=[id_me, id_other]))
@@ -124,38 +167,72 @@ map!(x->1, d)
 
 # Test @parallel load balancing - all processors should get either M or M+1
 # iterations out of the loop range for some M.
-if nprocs() < 4
-    remotecall_fetch(1, () -> addprocs(4 - nprocs()))
-end
-workloads = hist(@parallel((a,b)->[a,b], for i=1:7; myid(); end), nprocs())[2]
+workloads = hist(@parallel((a,b)->[a;b], for i=1:7; myid(); end), nprocs())[2]
 @test maximum(workloads) - minimum(workloads) <= 1
 
 # @parallel reduction should work even with very short ranges
 @test @parallel(+, for i=1:2; i; end) == 3
 
 # Testing timedwait on multiple RemoteRefs
-rr1 = RemoteRef()
-rr2 = RemoteRef()
-rr3 = RemoteRef()
+@sync begin
+    rr1 = RemoteRef()
+    rr2 = RemoteRef()
+    rr3 = RemoteRef()
 
-@async begin sleep(0.5); put!(rr1, :ok) end
-@async begin sleep(1.0); put!(rr2, :ok) end
-@async begin sleep(2.0); put!(rr3, :ok) end
+    @async begin sleep(0.5); put!(rr1, :ok) end
+    @async begin sleep(1.0); put!(rr2, :ok) end
+    @async begin sleep(2.0); put!(rr3, :ok) end
 
-tic()
-timedwait(1.0) do
-    all(map(isready, [rr1, rr2, rr3]))
+    tic()
+    timedwait(1.0) do
+        all(map(isready, [rr1, rr2, rr3]))
+    end
+    et=toq()
+    # assuming that 0.5 seconds is a good enough buffer on a typical modern CPU
+    try
+        @test (et >= 1.0) && (et <= 1.5)
+        @test !isready(rr3)
+    catch
+        warn("timedwait tests delayed. et=$et, isready(rr3)=$(isready(rr3))")
+    end
+    @test isready(rr1)
 end
-et=toq()
 
-# assuming that 0.5 seconds is a good enough buffer on a typical modern CPU
-try
-    @test (et >= 1.0) && (et <= 1.5)
-    @test !isready(rr3)
-catch
-    warn("timedwait tests delayed. et=$et, isready(rr3)=$(isready(rr3))")
+# specify pids for pmap
+@test sort(workers()[1:2]) == sort(unique(pmap(x->(sleep(0.1);myid()), 1:10, pids = workers()[1:2])))
+
+# Testing buffered  and unbuffered reads
+# This large array should write directly to the socket
+a = ones(10^6)
+@test a == remotecall_fetch(id_other, (x)->x, a)
+
+# Not a bitstype, should be buffered
+s = [randstring() for x in 1:10^5]
+@test s == remotecall_fetch(id_other, (x)->x, s)
+
+#large number of small requests
+num_small_requests = 10000
+@test fill(id_other, num_small_requests) == [remotecall_fetch(id_other, myid) for i in 1:num_small_requests]
+
+# test parallel sends of large arrays from multiple tasks to the same remote worker
+ntasks = 10
+rr_list = [RemoteRef() for x in 1:ntasks]
+for rr in rr_list
+    @async let rr=rr
+        a=ones(10^6);
+        try
+            for i in 1:10
+                @test a == remotecall_fetch(id_other, (x)->x, a)
+                yield()
+            end
+            put!(rr, :OK)
+        catch
+            put!(rr, :ERROR)
+        end
+    end
 end
-@test isready(rr1)
+
+@test [fetch(rr) for rr in rr_list] == [:OK for x in 1:ntasks]
 
 # TODO: The below block should be always enabled but the error is printed by the event loop
 
@@ -164,7 +241,7 @@ end
 # executed successfully before committing/merging
 
 if haskey(ENV, "PTEST_FULL")
-    println("START of parallel tests that print errors")
+    print("\n\nSTART of parallel tests that print errors\n")
 
     # make sure exceptions propagate when waiting on Tasks
     @test_throws ErrorException (@sync (@async error("oops")))
@@ -196,7 +273,52 @@ if haskey(ENV, "PTEST_FULL")
     @test length(res) == length(ups)
     @test isa(res[1], Exception)
 
-    println("END of parallel tests that print errors")
+    print("\n\nEND of parallel tests that print errors\n")
+
+@unix_only begin
+    #Issue #9951
+    hosts=[]
+    for i in 1:30
+        push!(hosts, "localhost", string(getipaddr()), "127.0.0.1")
+    end
+
+    print("\nTesting SSH addprocs with $(length(hosts)) workers...\n")
+    new_pids = remotecall_fetch(1, addprocs, hosts)
+#    print("Added workers $new_pids\n\n")
+    function test_n_remove_pids(new_pids)
+        for p in new_pids
+            w_in_remote = sort(remotecall_fetch(p, workers))
+            try
+                @test intersect(new_pids, w_in_remote) == new_pids
+            catch e
+                print("p       :     $p\n")
+                print("newpids :     $new_pids\n")
+                print("intersect   : $(intersect(new_pids, w_in_remote))\n\n\n")
+                rethrow(e)
+            end
+        end
+
+        @test :ok == remotecall_fetch(1, (p)->rmprocs(p; waitfor=5.0), new_pids)
+    end
+
+    test_n_remove_pids(new_pids)
+
+    print("\nMixed ssh addprocs with :auto\n")
+    new_pids = sort(remotecall_fetch(1, addprocs, ["localhost", ("127.0.0.1", :auto), "localhost"]))
+    @test length(new_pids) == (2 + Sys.CPU_CORES)
+    test_n_remove_pids(new_pids)
+
+    print("\nMixed ssh addprocs with numbers\n")
+    new_pids = sort(remotecall_fetch(1, addprocs, [("localhost", 2), ("127.0.0.1", 2), "localhost"]))
+    @test length(new_pids) == 5
+    test_n_remove_pids(new_pids)
+
+    print("\nssh addprocs with tunnel\n")
+    new_pids = sort(remotecall_fetch(1, ()->addprocs([("localhost", 2)]; tunnel=true)))
+    @test length(new_pids) == 2
+    test_n_remove_pids(new_pids)
+
+end
 end
 
 # issue #7727

@@ -3,7 +3,11 @@
 #include "llvm-version.h"
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
 #include <llvm/ExecutionEngine/JITEventListener.h>
+#ifdef LLVM37
+#include <llvm/DebugInfo/DWARF/DIContext.h>
+#else
 #include <llvm/DebugInfo/DIContext.h>
+#endif
 #include <llvm/Support/MemoryBuffer.h>
 #ifdef LLVM33
 #include <llvm/IR/Function.h>
@@ -31,6 +35,10 @@
 #endif
 #ifdef _OS_WINDOWS_
 #include <llvm/Object/COFF.h>
+#endif
+
+#if defined(USE_MCJIT) && !defined(LLVM36) && defined(_OS_DARWIN_)
+#include "../deps/llvm-3.5.0/lib/ExecutionEngine/MCJIT/MCJIT.h"
 #endif
 
 #include "julia.h"
@@ -66,6 +74,9 @@ struct FuncInfo {
 struct ObjectInfo {
     const object::ObjectFile* object;
     size_t size;
+#ifdef _OS_DARWIN_
+    const char *name;
+#endif
 };
 #endif
 
@@ -75,12 +86,13 @@ extern "C" EXCEPTION_DISPOSITION _seh_exception_handler(PEXCEPTION_RECORD Except
 #endif
 #include <dbghelp.h>
 static void create_PRUNTIME_FUNCTION(uint8_t *Code, size_t Size, StringRef fnname,
-        uint8_t *Section, size_t Allocated)
+        uint8_t *Section, size_t Allocated, uint8_t *UnwindData)
 {
     DWORD mod_size = 0;
 #if defined(_CPU_X86_64_)
+#if !defined(USE_MCJIT)
     uint8_t *catchjmp = Section+Allocated;
-    uint8_t *UnwindData = (uint8_t*)(((uintptr_t)catchjmp+12+3)&~(uintptr_t)3);
+    UnwindData = (uint8_t*)(((uintptr_t)catchjmp+12+3)&~(uintptr_t)3);
     if (!catchjmp[0]) {
         catchjmp[0] = 0x48;
         catchjmp[1] = 0xb8; // mov RAX, QWORD PTR [...]
@@ -95,26 +107,25 @@ static void create_PRUNTIME_FUNCTION(uint8_t *Code, size_t Size, StringRef fnnam
         UnwindData[5] = 0x03; // mov RBP, RSP
         UnwindData[6] = 1;    // first instruction
         UnwindData[7] = 0x50; // push RBP
-        *(DWORD*)&UnwindData[8] = (DWORD)Allocated; // relative location of catchjmp
+        *(DWORD*)&UnwindData[8] = (DWORD)(catchjmp - Section); // relative location of catchjmp
         mod_size = (DWORD)Allocated+48;
     }
-#if !defined(USE_MCJIT)
     PRUNTIME_FUNCTION tbl = (PRUNTIME_FUNCTION)(UnwindData+12);
 #else
     PRUNTIME_FUNCTION tbl = (PRUNTIME_FUNCTION)malloc(sizeof(RUNTIME_FUNCTION));
 #endif
     tbl->BeginAddress = (DWORD)(Code - Section);
-    tbl->EndAddress = (DWORD)(intptr_t)(Code + Size - Section);
-    tbl->UnwindData = (DWORD)(intptr_t)(UnwindData - Section);
+    tbl->EndAddress = (DWORD)(Code - Section + Size);
+    tbl->UnwindData = (DWORD)(UnwindData - Section);
 #else // defined(_CPU_X86_64_)
-    Section = Code;
+    Section += (uintptr_t)Code;
     mod_size = Size;
 #endif
     if (0) {
         assert(!jl_in_stackwalk);
         jl_in_stackwalk = 1;
         if (mod_size && !SymLoadModuleEx(GetCurrentProcess(), NULL, NULL, NULL, (DWORD64)Section, mod_size, NULL, SLMFLAG_VIRTUAL)) {
-#if defined(_CPU_X86_64_)
+#if defined(_CPU_X86_64_) && !defined(USE_MCJIT)
             catchjmp[0] = 0;
 #endif
             static int warned = 0;
@@ -171,7 +182,7 @@ public:
                                        size_t Size, const EmittedFunctionDetails &Details)
     {
 #if defined(_OS_WINDOWS_)
-        create_PRUNTIME_FUNCTION((uint8_t*)Code, Size, F.getName(), (uint8_t*)Code, Size);
+        create_PRUNTIME_FUNCTION((uint8_t*)Code, Size, F.getName(), (uint8_t*)Code, Size, NULL);
 #endif
         FuncInfo tmp = {&F, Size, F.getName().str(), std::string(), Details.LineStarts};
         info[(size_t)(Code)] = tmp;
@@ -191,53 +202,141 @@ public:
     virtual void NotifyObjectEmitted(const ObjectImage &obj)
 #endif
     {
-        uint64_t SectAddr, Addr;
+        uint64_t Addr;
         uint64_t Size;
         object::SymbolRef::Type SymbolType;
-#ifndef _OS_LINUX_
 #ifdef LLVM36
         object::section_iterator Section = obj.section_begin();
         object::section_iterator EndSection = obj.section_end();
-        StringRef sName;
 #else
         object::section_iterator Section = obj.begin_sections();
         object::section_iterator EndSection = obj.end_sections();
+        bool isText;
 #endif
+#ifndef _OS_LINUX_
+        StringRef sName;
 #endif
 #ifdef _OS_WINDOWS_
-        StringRef Name;
-        uint64_t SectionAddr;
-        uint64_t SectionSize;
+        uint64_t SectionAddr = 0;
+        uint64_t SectionSize = 0;
+        uint64_t SectionAddrCheck = 0; // assert that all of the Sections are at the same location
 #endif
+
+#if defined(_OS_WINDOWS_)
+#if defined(_CPU_X86_64_)
+        uint8_t *UnwindData = NULL;
+        uint8_t *catchjmp = NULL;
+        for (const object::SymbolRef &sym_iter : obj.symbols()) {
+            sym_iter.getName(sName);
+            if (sName.equals("__UnwindData")) {
+                sym_iter.getAddress(Addr);
+                sym_iter.getSection(Section);
+#ifdef LLVM36
+                assert(Section->isText());
+                Section->getName(sName);
+                SectionAddr = L.getSectionLoadAddress(sName);
+                Addr += SectionAddr;
+#else
+                if (Section->isText(isText) || !isText) assert(0 && "!isText");
+                Section->getAddress(SectionAddr);
+#endif
+                UnwindData = (uint8_t*)Addr;
+                if (SectionAddrCheck)
+                    assert(SectionAddrCheck == SectionAddr);
+                else
+                    SectionAddrCheck = SectionAddr;
+            }
+            if (sName.equals("__catchjmp")) {
+                sym_iter.getAddress(Addr);
+                sym_iter.getSection(Section);
+#ifdef LLVM36
+                assert(Section->isText());
+                Section->getName(sName);
+                SectionAddr = L.getSectionLoadAddress(sName);
+                Addr += SectionAddr;
+#else
+                if (Section->isText(isText) || !isText) assert(0 && "!isText");
+                Section->getAddress(SectionAddr);
+#endif
+                catchjmp = (uint8_t*)Addr;
+                if (SectionAddrCheck)
+                    assert(SectionAddrCheck == SectionAddr);
+                else
+                    SectionAddrCheck = SectionAddr;
+            }
+        }
+        assert(catchjmp);
+        assert(UnwindData);
+        catchjmp[0] = 0x48;
+        catchjmp[1] = 0xb8; // mov RAX, QWORD PTR [&_seh_exception_handle]
+        *(uint64_t*)(&catchjmp[2]) = (uint64_t)&_seh_exception_handler;
+        catchjmp[10] = 0xff;
+        catchjmp[11] = 0xe0; // jmp RAX
+        UnwindData[0] = 0x09; // version info, UNW_FLAG_EHANDLER
+        UnwindData[1] = 4;    // size of prolog (bytes)
+        UnwindData[2] = 2;    // count of unwind codes (slots)
+        UnwindData[3] = 0x05; // frame register (rbp) = rsp
+        UnwindData[4] = 4;    // second instruction
+        UnwindData[5] = 0x03; // mov RBP, RSP
+        UnwindData[6] = 1;    // first instruction
+        UnwindData[7] = 0x50; // push RBP
+        *(DWORD*)&UnwindData[8] = (DWORD)(catchjmp - (uint8_t*)SectionAddr); // relative location of catchjmp
+#else // defined(_OS_X86_64_)
+        uint8_t *UnwindData = NULL;
+#endif // defined(_OS_X86_64_)
+#endif // defined(_OS_WINDOWS_)
 
 #ifdef LLVM35
         for (const object::SymbolRef &sym_iter : obj.symbols()) {
             sym_iter.getType(SymbolType);
             if (SymbolType != object::SymbolRef::ST_Function) continue;
             sym_iter.getSize(Size);
-            sym_iter.getAddress(SectAddr);
-#ifndef _OS_LINUX_
+            sym_iter.getAddress(Addr);
             sym_iter.getSection(Section);
             if (Section == EndSection) continue;
-            Section = Section->getRelocatedSection();
-            if (Section == EndSection) continue;
-#ifdef LLVM36
+#if defined(LLVM36)
             if (!Section->isText()) continue;
+#else
+            if (Section->isText(isText) || !isText) continue;
+#endif
+#ifdef _OS_DARWIN_
+#if defined(LLVM36)
             Section->getName(sName);
-            Addr = SectAddr + L.getSectionLoadAddress(sName);
+            Addr += L.getSectionLoadAddress(sName);
+            sym_iter.getName(sName);
+            if (sName[0] == '_') {
+                sName = sName.substr(1);
+            }
 #else
-            Addr = SectAddr;
+            sym_iter.getName(sName);
+            Addr = ((MCJIT*)jl_ExecutionEngine)->getSymbolAddress(sName, true);
+            if (!Addr && sName[0] == '_') {
+                sName = sName.substr(1);
+                Addr = ((MCJIT*)jl_ExecutionEngine)->getSymbolAddress(sName, true);
+            }
+            if (!Addr) continue;
 #endif
+#elif defined(_OS_WINDOWS_)
+#if defined(LLVM36)
+            SectionSize = Section->getSize();
+            Section->getName(sName);
+            SectionAddr = L.getSectionLoadAddress(sName);
+            Addr += SectionAddr;
 #else
-            Addr = SectAddr;
-#endif
-#ifdef _OS_WINDOWS_
-            sym_iter.getName(Name);
             Section->getAddress(SectionAddr);
             Section->getSize(SectionSize);
+#endif
+            sym_iter.getName(sName);
+#ifdef _CPU_X86_
+            if (sName[0] == '_') sName = sName.substr(1);
+#endif
+            if (SectionAddrCheck)
+                assert(SectionAddrCheck == SectionAddr);
+            else
+                SectionAddrCheck = SectionAddr;
             create_PRUNTIME_FUNCTION(
-                   (uint8_t*)(intptr_t)Addr, (size_t)Size, Name,
-                   (uint8_t*)(intptr_t)SectionAddr, (size_t)SectionSize);
+                   (uint8_t*)(intptr_t)Addr, (size_t)Size, sName,
+                   (uint8_t*)(intptr_t)SectionAddr, (size_t)SectionSize, UnwindData);
 #endif
             const object::ObjectFile *objfile =
 #ifdef LLVM36
@@ -245,7 +344,11 @@ public:
 #else
                 obj.getObjectFile();
 #endif
-            ObjectInfo tmp = {objfile, (size_t)Size};
+            ObjectInfo tmp = {objfile, (size_t)Size
+#ifdef _OS_DARWIN_
+                ,strndup(sName.data(), sName.size())
+#endif
+            };
             objectmap[Addr] = tmp;
         }
 #else //LLVM34
@@ -278,16 +381,19 @@ public:
 extern "C"
 const char *jl_demangle(const char *name)
 {
-    const char *start = name;
-    const char *end = start;
+    const char *start = name + 6;
+    const char *end = name + strlen(name);
     char *ret;
-    while ((*start++ != '_') && (*start != '\0'));
-    if (*name == '\0') goto done;
-    while ((*end++ != ';') && (*end != '\0'));
-    if (*name == '\0') goto done;
-    ret = (char*)malloc(end-start);
-    memcpy(ret,start,end-start-1);
-    ret[end-start-1] = '\0';
+    if (strncmp(name, "julia_", 6)) goto done;
+    if (*start == '\0') goto done;
+    while (*(--end) != '_') {
+        char c = *end;
+        if (c < '0' || c > '9') goto done;
+    }
+    if (end <= start) goto done;
+    ret = (char*)malloc(end-start+1);
+    memcpy(ret,start,end-start);
+    ret[end-start] = '\0';
     return ret;
  done:
     return strdup(name);
@@ -398,7 +504,9 @@ void jl_getDylibFunctionInfo(const char **name, size_t *line, const char **filen
     if (isvalid) {
         char *fname = ModuleInfo.LoadedImageName;
         DWORD64 fbase = ModuleInfo.BaseOfImage;
+#ifdef LLVM35
         size_t msize = ModuleInfo.ImageSize;
+#endif
         *fromC = (fbase != jl_sysimage_base);
         if (skipC && *fromC) {
             return;
@@ -433,8 +541,6 @@ void jl_getDylibFunctionInfo(const char **name, size_t *line, const char **filen
         } else if (*fromC) {
             // No debug info, use dll name instead
             *filename = fname;
-        } else {
-            *filename = "";
         }
         jl_in_stackwalk = 0;
 #else // ifdef _OS_WINDOWS_
@@ -526,7 +632,9 @@ void jl_getDylibFunctionInfo(const char **name, size_t *line, const char **filen
 #endif
 #endif // ifdef _OS_DARWIN_
             if (errorobj) {
-#ifdef LLVM36
+#if LLVM36 && defined(_OS_WINDOWS_)
+                obj = errorobj.get().release();
+#elif LLVM36
                 auto binary = errorobj.get().takeBinary();
                 obj = binary.first.release();
                 binary.second.release();
@@ -602,22 +710,26 @@ void jl_getFunctionInfo(const char **name, size_t *line, const char **filename, 
     std::map<size_t, ObjectInfo, revcomp> &objmap = jl_jit_events->getObjectMap();
     std::map<size_t, ObjectInfo, revcomp>::iterator it = objmap.lower_bound(pointer);
 
-    if (it == objmap.end() || (pointer - it->first) > it->second.size)
-        return jl_getDylibFunctionInfo(name,line,filename,pointer,fromC,skipC);
-
-#ifdef LLVM36
-    DIContext *context = DIContext::getDWARFContext(*it->second.object);
+    if (it != objmap.end() && (intptr_t)(*it).first + (*it).second.size > pointer) {
+#if defined(_OS_DARWIN_)
+        *name = jl_demangle((*it).second.name);
+        DIContext *context = NULL; // current versions of MCJIT can't handle MachO relocations
 #else
-    DIContext *context = DIContext::getDWARFContext(const_cast<object::ObjectFile*>(it->second.object));
+#ifdef LLVM36
+        DIContext *context = DIContext::getDWARFContext(*it->second.object);
+#else
+        DIContext *context = DIContext::getDWARFContext(const_cast<object::ObjectFile*>(it->second.object));
 #endif
-    lookup_pointer(context, name, line, filename, pointer, 1, fromC);
+#endif
+        lookup_pointer(context, name, line, filename, pointer, 1, fromC);
+        return;
+    }
 
 #else // !USE_MCJIT
-
 // Without MCJIT we use the FuncInfo structure containing address maps
     std::map<size_t, FuncInfo, revcomp> &info = jl_jit_events->getMap();
     std::map<size_t, FuncInfo, revcomp>::iterator it = info.lower_bound(pointer);
-    if (it != info.end() && (size_t)(*it).first + (*it).second.lengthAdr >= pointer) {
+    if (it != info.end() && (intptr_t)(*it).first + (*it).second.lengthAdr >= pointer) {
         // We do this to hide the jlcall wrappers when getting julia backtraces,
         // but it is still good to have them for regular lookup of C frames.
         if (skipC && (*it).second.lines.empty()) {
@@ -665,11 +777,10 @@ void jl_getFunctionInfo(const char **name, size_t *line, const char **filename, 
         if (*line == (size_t) -1) {
             *line = prev.Loc.getLine();
         }
-    }
-    else {
-        jl_getDylibFunctionInfo(name,line,filename,pointer,fromC,skipC);
+        return;
     }
 #endif // USE_MCJIT
+    jl_getDylibFunctionInfo(name,line,filename,pointer,fromC,skipC);
 }
 
 int jl_get_llvmf_info(size_t fptr, uint64_t *symsize,
@@ -683,97 +794,28 @@ int jl_get_llvmf_info(size_t fptr, uint64_t *symsize,
     std::map<size_t, FuncInfo, revcomp> &fmap = jl_jit_events->getMap();
     std::map<size_t, FuncInfo, revcomp>::iterator fit = fmap.find(fptr);
 
-    if (fit == fmap.end()) {
-        return 0;
+    if (fit != fmap.end()) {
+        *symsize = fit->second.lengthAdr;
+        *lines = fit->second.lines;
+        return 1;
     }
-    *symsize = fit->second.lengthAdr;
-    *lines = fit->second.lines;
-    return 1;
+    return 0;
 #else // MCJIT version
-    std::map<size_t, ObjectInfo, revcomp> objmap = jl_jit_events->getObjectMap();
+    std::map<size_t, ObjectInfo, revcomp> &objmap = jl_jit_events->getObjectMap();
     std::map<size_t, ObjectInfo, revcomp>::iterator fit = objmap.find(fptr);
 
-    if (fit == objmap.end()) {
-        return 0;
+    if (fit != objmap.end()) {
+        *symsize = fit->second.size;
+        *object = fit->second.object;
+        return 1;
     }
-    *symsize = fit->second.size;
-    *object = fit->second.object;
-    return 1;
+    return 0;
 #endif
 }
 
 
 #if defined(_OS_WINDOWS_)
 #ifdef USE_MCJIT
-#if defined(_CPU_X86_64_)
-class RTDyldMemoryManagerWin : public RTDyldMemoryManager {
-public:
-  RTDyldMemoryManagerWin(RTDyldMemoryManager *MM)
-    : ClientMM(MM) {}
-
-  // Functions deferred to client memory manager
-  uint8_t *allocateCodeSection(uintptr_t Size, unsigned Alignment,
-                               unsigned SectionID,
-                               StringRef SectionName) override {
-    uint8_t *mem = ClientMM->allocateCodeSection(Size+48, Alignment, SectionID, SectionName);
-    mem[Size] = 0;
-    return mem;
-  }
-
-  uint8_t *allocateDataSection(uintptr_t Size, unsigned Alignment,
-                               unsigned SectionID, StringRef SectionName,
-                               bool IsReadOnly) override {
-    return ClientMM->allocateDataSection(Size, Alignment,
-                                         SectionID, SectionName, IsReadOnly);
-  }
-
-  void reserveAllocationSpace(uintptr_t CodeSize, uintptr_t DataSizeRO,
-                              uintptr_t DataSizeRW) override {
-    return ClientMM->reserveAllocationSpace(CodeSize+48, DataSizeRO, DataSizeRW);
-  }
-
-  bool needsToReserveAllocationSpace() override {
-    return ClientMM->needsToReserveAllocationSpace();
-  }
-
-  void registerEHFrames(uint8_t *Addr, uint64_t LoadAddr,
-                        size_t Size) override {
-    ClientMM->registerEHFrames(Addr, LoadAddr, Size);
-  }
-
-  void deregisterEHFrames(uint8_t *Addr, uint64_t LoadAddr,
-                          size_t Size) override {
-    ClientMM->deregisterEHFrames(Addr, LoadAddr, Size);
-  }
-
-  uint64_t getSymbolAddress(const std::string &Name) override {
-    return ClientMM->getSymbolAddress(Name);
-  }
-
-  void notifyObjectLoaded(ExecutionEngine *EE,
-                          const ObjectImage *Obj) override {
-    ClientMM->notifyObjectLoaded(EE, Obj);
-  }
-
-  void *getPointerToNamedFunction(const std::string &Name,
-                                  bool AbortOnFailure = true) override {
-      return ClientMM->getPointerToNamedFunction(Name,AbortOnFailure);
-  }
-
-  bool finalizeMemory(std::string *ErrMsg = nullptr) override {
-    return ClientMM->finalizeMemory(ErrMsg);
-  }
-
-private:
-  std::unique_ptr<RTDyldMemoryManager> ClientMM;
-};
-RTDyldMemoryManager* createRTDyldMemoryManagerWin(RTDyldMemoryManager *MM) {
-    return new RTDyldMemoryManagerWin(MM);
-}
-#else
-RTDyldMemoryManager* createRTDyldMemoryManagerWin(RTDyldMemoryManager *MM) {
-    return NULL;
-}
 extern "C"
 DWORD64 jl_getUnwindInfo(ULONG64 dwAddr)
 {
@@ -784,7 +826,7 @@ DWORD64 jl_getUnwindInfo(ULONG64 dwAddr)
     }
     return 0;
 }
-#endif
+
 #else //ifdef USE_MCJIT
 #if defined(_CPU_X86_64_)
 // Custom memory manager for exception handling on Windows

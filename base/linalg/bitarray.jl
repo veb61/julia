@@ -181,7 +181,7 @@ function istril(A::BitMatrix)
 end
 
 function findmax(a::BitArray)
-    length(a)==0 && error("findmax: array is empty")
+    isempty(a) && throw(ArgumentError("BitArray must be non-empty"))
     m, mi = false, 1
     ti = 1
     ac = a.chunks
@@ -194,7 +194,7 @@ function findmax(a::BitArray)
 end
 
 function findmin(a::BitArray)
-    length(a)==0 && error("findmin: array is empty")
+    isempty(a) && throw(ArgumentError("BitArray must be non-empty"))
     m, mi = true, 1
     ti = 1
     ac = a.chunks
@@ -203,9 +203,8 @@ function findmin(a::BitArray)
         ti += k
         k==64 || return (false, ti)
     end
-    l = (Base.@_mod64 (length(a)-1)) + 1
-    msk = Base.@_mskr l
-    @inbounds k = trailing_ones(ac[end] & msk)
+    l = Base._mod64(length(a)-1) + 1
+    @inbounds k = trailing_ones(ac[end] & Base._msk_end(l))
     ti += k
     k==l || return (false, ri)
     return m, mi

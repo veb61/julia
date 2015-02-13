@@ -59,18 +59,21 @@ function factorial(n::Integer)
     return f
 end
 
+factorial(x::Number) = gamma(x + 1) # fallback for x not Integer
+
 # computes n!/k!
 function factorial{T<:Integer}(n::T, k::T)
     if k < 0 || n < 0 || k > n
-        return zero(T)
+        throw(DomainError())
     end
     f = one(T)
     while n > k
-        f *= n
+        f = Base.checked_mul(f,n)
         n -= 1
     end
     return f
 end
+factorial(n::Integer, k::Integer) = factorial(promote(n, k)...)
 
 function binomial{T<:Integer}(n::T, k::T)
     k < 0 && return zero(T)
@@ -136,7 +139,7 @@ end
 
 function nthperm!(a::AbstractVector, k::Integer)
     k -= 1 # make k 1-indexed
-    k < 0 && error("permutation must be a positive number")
+    k < 0 && throw(ArgumentError("permutation k must be ≥ 0, got $k"))
     n = length(a)
     n == 0 && return a
     f = factorial(oftype(k, n-1))
@@ -157,7 +160,7 @@ end
 nthperm(a::AbstractVector, k::Integer) = nthperm!(copy(a),k)
 
 function nthperm{T<:Integer}(p::AbstractVector{T})
-    isperm(p) || error("argument is not a permutation")
+    isperm(p) || throw(ArgumentError("argument is not a permutation"))
     k, n = 1, length(p)
     for i = 1:n-1
         f = factorial(n-i)
@@ -174,7 +177,7 @@ function invperm(a::AbstractVector)
     for i = 1:n
         j = a[i]
         ((1 <= j <= n) && b[j] == 0) ||
-            error("argument is not a permutation")
+            throw(ArgumentError("argument is not a permutation"))
         b[j] = i
     end
     b
@@ -242,9 +245,7 @@ immutable Combinations{T}
     t::Int
 end
 
-eltype(c::Combinations) = typeof(c.a)
-eltype{T}(c::Combinations{UnitRange{T}}) = Array{T,1}
-eltype{T}(c::Combinations{Range{T}}) = Array{T,1}
+eltype{T}(::Type{Combinations{T}}) = Vector{eltype(T)}
 
 length(c::Combinations) = binomial(length(c.a),c.t)
 
@@ -256,9 +257,9 @@ function combinations(a, t::Integer)
     Combinations(a, t)
 end
 
-start(c::Combinations) = [1:c.t]
+start(c::Combinations) = [1:c.t;]
 function next(c::Combinations, s)
-    comb = c.a[s]
+    comb = [c.a[si] for si in s]
     if c.t == 0
         # special case to generate 1 result for t==0
         return (comb,[length(c.a)+2])
@@ -282,17 +283,15 @@ immutable Permutations{T}
     a::T
 end
 
-eltype(c::Permutations) = typeof(c.a)
-eltype{T}(c::Permutations{UnitRange{T}}) = Array{T,1}
-eltype{T}(c::Permutations{Range{T}}) = Array{T,1}
+eltype{T}(::Type{Permutations{T}}) = Vector{eltype(T)}
 
-length(c::Permutations) = factorial(length(c.a))
+length(p::Permutations) = factorial(length(p.a))
 
 permutations(a) = Permutations(a)
 
-start(p::Permutations) = [1:length(p.a)]
+start(p::Permutations) = [1:length(p.a);]
 function next(p::Permutations, s)
-    perm = p.a[s]
+    perm = [p.a[si] for si in s]
     if length(p.a) == 0
         # special case to generate 1 result for len==0
         return (perm,[1])
@@ -401,7 +400,7 @@ function nextfixedpartition(n, m, bs)
     as = copy(bs)
     if isempty(as)
         # First iteration
-        as = [n-m+1, ones(Int, m-1)]
+        as = [n-m+1; ones(Int, m-1)]
     elseif as[2] < as[1]-1
         # Most common iteration
         as[1] -= 1
@@ -594,7 +593,7 @@ end
 # for integer n1, n2, n3
 function nextprod(a::Vector{Int}, x)
     if x > typemax(Int)
-        error("unsafe for x bigger than typemax(Int)")
+        throw(ArgumentError("unsafe for x > typemax(Int), got $x"))
     end
     k = length(a)
     v = ones(Int, k)                  # current value of each counter
@@ -635,7 +634,7 @@ end
 # for integer n1, n2, n3
 function prevprod(a::Vector{Int}, x)
     if x > typemax(Int)
-        error("unsafe for x bigger than typemax(Int)")
+        throw(ArgumentError("unsafe for x > typemax(Int), got $x"))
     end
     k = length(a)
     v = ones(Int, k)                  # current value of each counter

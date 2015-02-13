@@ -639,7 +639,7 @@ function build(pkgs::Vector)
     WARNING: $(join(map(x->x[1],errs),", "," and ")) had build errors.
 
      - packages with build errors remain installed in $(pwd())
-     - build a package and all its dependencies with `Pkg.build(pkg)`
+     - build the package(s) and all dependencies with `Pkg.build("$(join(map(x->x[1],errs),"\", \""))")`
      - build a single package by running its `deps/build.jl` script
     """)
 end
@@ -689,12 +689,9 @@ function test!(pkg::AbstractString, errs::Vector{AbstractString}, notests::Vecto
         info("Testing $pkg")
         cd(dirname(test_path)) do
             try
-                if coverage
-                    cmd = `$JULIA_HOME/julia --code-coverage $test_path`
-                else
-                    cmd = `$JULIA_HOME/julia $test_path`
-                end
-                run(cmd)
+                color = Base.have_color? "--color=yes" : "--color=no"
+                codecov = coverage? ["--code-coverage=user", "--inline=no"] : ["--code-coverage=none"]
+                run(`$JULIA_HOME/julia --check-bounds=yes $codecov $color $test_path`)
                 info("$pkg tests passed")
             catch err
                 warnbanner(err, label="[ ERROR: $pkg ]")

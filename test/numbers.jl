@@ -45,11 +45,11 @@
 @test bool(1//2) == true
 
 # basic arithmetic
-@test 2+3 == 5
-@test 2.+3. == 5.
-@test 2*3 == 6
-@test 2.*3 == 6
-@test 2. * 3. == 6.
+@test 2 + 3 == 5
+@test 2.0 + 3.0 == 5.
+@test 2 * 3 == 6
+@test 2.0 * 3 == 6
+@test 2.0 * 3.0 == 6.
 @test min(1.0,1) == 1
 
 @test minmax(5, 3) == (3, 5)
@@ -58,6 +58,99 @@
 @test minmax(3., NaN) == (3., 3.)
 @test minmax(NaN, 3.) == (3., 3.)
 @test isequal(minmax(NaN, NaN), (NaN, NaN))
+
+# fma
+let x = int64(7)^7
+    @test fma(x-1, x-2, x-3) == (x-1) * (x-2) + (x-3)
+    @test (fma((x-1)//(x-2), (x-3)//(x-4), (x-5)//(x-6)) ==
+           (x-1)//(x-2) * (x-3)//(x-4) + (x-5)//(x-6))
+end
+
+let x = BigInt(7)^77
+    @test fma(x-1, x-2, x-3) == (x-1) * (x-2) + (x-3)
+    @test (fma((x-1)//(x-2), (x-3)//(x-4), (x-5)//(x-6)) ==
+           (x-1)//(x-2) * (x-3)//(x-4) + (x-5)//(x-6))
+end
+
+let eps = 1//BigInt(2)^30, one_eps = 1+eps,
+    eps64 = float64(eps), one_eps64 = float64(one_eps)
+    @test eps64 == float64(eps)
+    @test rationalize(BigInt, eps64, tol=0) == eps
+    @test one_eps64 == float64(one_eps)
+    @test rationalize(BigInt, one_eps64, tol=0) == one_eps
+    @test one_eps64 * one_eps64 - 1 != float64(one_eps * one_eps - 1)
+    @test fma(one_eps64, one_eps64, -1) == float64(one_eps * one_eps - 1)
+end
+
+let eps = 1//BigInt(2)^15, one_eps = 1+eps,
+    eps32 = float32(eps), one_eps32 = float32(one_eps)
+    @test eps32 == float32(eps)
+    @test rationalize(BigInt, eps32, tol=0) == eps
+    @test one_eps32 == float32(one_eps)
+    @test rationalize(BigInt, one_eps32, tol=0) == one_eps
+    @test one_eps32 * one_eps32 - 1 != float32(one_eps * one_eps - 1)
+    @test fma(one_eps32, one_eps32, -1) == float32(one_eps * one_eps - 1)
+end
+
+let eps = 1//BigInt(2)^7, one_eps = 1+eps,
+    eps16 = float16(float32(eps)), one_eps16 = float16(float32(one_eps))
+    @test eps16 == float16(float32(eps))
+    # Currently broken in Julia -- enable when "rationalize" is fixed;
+    # see <https://github.com/JuliaLang/julia/issues/9897>
+    # @test rationalize(BigInt, eps16, tol=0) == eps
+    @test one_eps16 == float16(float32(one_eps))
+    # @test rationalize(BigInt, one_eps16, tol=0) == one_eps
+    @test one_eps16 * one_eps16 - 1 != float16(float32(one_eps * one_eps - 1))
+    @test (fma(one_eps16, one_eps16, -1) ==
+           float16(float32(one_eps * one_eps - 1)))
+end
+
+let eps = 1//BigInt(2)^200, one_eps = 1+eps,
+    eps256 = BigFloat(eps), one_eps256 = BigFloat(one_eps)
+    @test eps256 == BigFloat(eps)
+    @test rationalize(BigInt, eps256, tol=0) == eps
+    @test one_eps256 == BigFloat(one_eps)
+    @test rationalize(BigInt, one_eps256, tol=0) == one_eps
+    @test one_eps256 * one_eps256 - 1 != BigFloat(one_eps * one_eps - 1)
+    @test fma(one_eps256, one_eps256, -1) == BigFloat(one_eps * one_eps - 1)
+end
+
+# muladd
+
+let eps = 1//BigInt(2)^30, one_eps = 1+eps,
+    eps64 = float64(eps), one_eps64 = float64(one_eps)
+    @test eps64 == float64(eps)
+    @test one_eps64 == float64(one_eps)
+    @test one_eps64 * one_eps64 - 1 != float64(one_eps * one_eps - 1)
+    @test isapprox(muladd(one_eps64, one_eps64, -1),
+                   float64(one_eps * one_eps - 1))
+end
+
+let eps = 1//BigInt(2)^15, one_eps = 1+eps,
+    eps32 = float32(eps), one_eps32 = float32(one_eps)
+    @test eps32 == float32(eps)
+    @test one_eps32 == float32(one_eps)
+    @test one_eps32 * one_eps32 - 1 != float32(one_eps * one_eps - 1)
+    @test isapprox(muladd(one_eps32, one_eps32, -1),
+                   float32(one_eps * one_eps - 1))
+end
+
+let eps = 1//BigInt(2)^7, one_eps = 1+eps,
+    eps16 = float16(float32(eps)), one_eps16 = float16(float32(one_eps))
+    @test eps16 == float16(float32(eps))
+    @test one_eps16 == float16(float32(one_eps))
+    @test one_eps16 * one_eps16 - 1 != float16(float32(one_eps * one_eps - 1))
+    @test isapprox(muladd(one_eps16, one_eps16, -1),
+                   float16(float32(one_eps * one_eps - 1)))
+end
+
+@test muladd(1,2,3) == 1*2+3
+@test muladd(big(1),2,3) == big(1)*2+3
+@test muladd(uint(1),2,3) == uint(1)*2+3
+@test muladd(1//1,2,3) == (1//1)*2+3
+@test muladd(big(1//1),2,3) == big(1//1)*2+3
+@test muladd(1.0,2,3) == 1.0*2+3
+@test muladd(big(1.0),2,3) == big(1.0)*2+3
 
 # lexing typemin(Int64)
 @test (-9223372036854775808)^1 == -9223372036854775808
@@ -799,6 +892,46 @@ end
 @test nextfloat(0.0) == 1//(BigInt(2)^1074)
 @test nextfloat(0.0) != 1//(BigInt(2)^1074-1)
 
+@test 1/3 < 1//3
+@test !(1//3 < 1/3)
+@test -1/3 < 1//3
+@test -1/3 > -1//3
+@test 1/3 > -1//3
+@test 1/5 > 1//5
+@test 1//3 < Inf
+@test 0//1 < Inf
+@test 1//0 == Inf
+@test -1//0 == -Inf
+@test -1//0 != Inf
+@test 1//0 != -Inf
+@test !(1//0 < Inf)
+@test !(1//3 < NaN)
+@test !(1//3 == NaN)
+@test !(1//3 > NaN)
+
+@test Float64(pi,RoundDown) < pi
+@test Float64(pi,RoundUp) > pi
+@test !(Float64(pi,RoundDown) > pi)
+@test !(Float64(pi,RoundUp) < pi)
+@test Float64(pi,RoundDown) <= pi
+@test Float64(pi,RoundUp) >= pi
+@test Float64(pi,RoundDown) != pi
+@test Float64(pi,RoundUp) != pi
+
+@test Float32(pi,RoundDown) < pi
+@test Float32(pi,RoundUp) > pi
+@test !(Float32(pi,RoundDown) > pi)
+@test !(Float32(pi,RoundUp) < pi)
+
+@test prevfloat(big(pi)) < pi
+@test nextfloat(big(pi)) > pi
+@test !(prevfloat(big(pi)) > pi)
+@test !(nextfloat(big(pi)) < pi)
+
+@test 2646693125139304345//842468587426513207 < pi
+@test !(2646693125139304345//842468587426513207 > pi)
+@test 2646693125139304345//842468587426513207 != pi
+
 @test sqrt(2) == 1.4142135623730951
 
 @test 1+1.5 == 2.5
@@ -1340,16 +1473,29 @@ let ≈(x,y) = x==y && typeof(x)==typeof(y)
             r = (1:n)-div(n,2)
             y = t[x/4 for x in r]
             @test trunc(y) ≈ t[div(i,4) for i in r]
-            @test round(y) ≈ t[(i+1+(i>=0))>>2 for i in r]
             @test floor(y) ≈ t[i>>2 for i in r]
             @test ceil(y)  ≈ t[(i+3)>>2 for i in r]
+            @test round(y) ≈ t[(i+1+isodd(i>>2))>>2 for i in r]
+            @test round(y,RoundNearestTiesAway) ≈ t[(i+1+(i>=0))>>2 for i in r]
+            @test round(y,RoundNearestTiesUp) ≈ t[(i+2)>>2 for i in r]
         end
     end
 end
 
 @test_throws InexactError round(Int,Inf)
 @test_throws InexactError round(Int,NaN)
-@test round(Int,2.5) == 3
+@test round(Int,2.5) == 2
+@test round(Int,1.5) == 2
+@test round(Int,-2.5) == -2
+@test round(Int,-1.5) == -2
+@test round(Int,2.5,RoundNearestTiesAway) == 3
+@test round(Int,1.5,RoundNearestTiesAway) == 2
+@test round(Int,2.5,RoundNearestTiesUp) == 3
+@test round(Int,1.5,RoundNearestTiesUp) == 2
+@test round(Int,-2.5,RoundNearestTiesAway) == -3
+@test round(Int,-1.5,RoundNearestTiesAway) == -2
+@test round(Int,-2.5,RoundNearestTiesUp) == -2
+@test round(Int,-1.5,RoundNearestTiesUp) == -1
 @test round(Int,-1.9) == -2
 @test_throws InexactError round(Int64, 9.223372036854776e18)
 @test       round(Int64, 9.223372036854775e18) == 9223372036854774784
@@ -1372,28 +1518,45 @@ for n = 1:100
     @test n == m
 end
 
-@test round(UInt,-0.0) == 0
-@test round(Int,-0.0) == 0
+for Ti in [Int,UInt]
+    for Tf in [Float16,Float32,Float64]
 
-@test round(Int, 0.5) == 1
-@test round(Int, prevfloat(0.5)) == 0
-@test round(Int, -0.5) == -1
-@test round(Int, nextfloat(-0.5)) == 0
+        @test round(Ti,Tf(-0.0)) == 0
+        @test round(Ti,Tf(-0.0),RoundNearestTiesAway) == 0
+        @test round(Ti,Tf(-0.0),RoundNearestTiesUp) == 0
 
-@test round(UInt, 0.5) == 1
-@test round(UInt, prevfloat(0.5)) == 0
-@test_throws InexactError round(UInt, -0.5)
-@test round(UInt, nextfloat(-0.5)) == 0
+        @test round(Ti, Tf(0.5)) == 0
+        @test round(Ti, Tf(0.5), RoundNearestTiesAway) == 1
+        @test round(Ti, Tf(0.5), RoundNearestTiesUp) == 1
 
-@test round(Int, 0.5f0) == 1
-@test round(Int, prevfloat(0.5f0)) == 0
-@test round(Int, -0.5f0) == -1
-@test round(Int, nextfloat(-0.5f0)) == 0
+        @test round(Ti, prevfloat(Tf(0.5))) == 0
+        @test round(Ti, prevfloat(Tf(0.5)), RoundNearestTiesAway) == 0
+        @test round(Ti, prevfloat(Tf(0.5)), RoundNearestTiesUp) == 0
 
-@test round(UInt, 0.5f0) == 1
-@test round(UInt, prevfloat(0.5f0)) == 0
-@test_throws InexactError round(UInt, -0.5f0)
-@test round(UInt, nextfloat(-0.5f0)) == 0
+        @test round(Ti, nextfloat(Tf(0.5))) == 1
+        @test round(Ti, nextfloat(Tf(0.5)), RoundNearestTiesAway) == 1
+        @test round(Ti, nextfloat(Tf(0.5)), RoundNearestTiesUp) == 1
+
+        @test round(Ti, Tf(-0.5)) == 0
+        @test round(Ti, Tf(-0.5), RoundNearestTiesUp) == 0
+
+        @test round(Ti, nextfloat(Tf(-0.5))) == 0
+        @test round(Ti, nextfloat(Tf(-0.5)), RoundNearestTiesAway) == 0
+        @test round(Ti, nextfloat(Tf(-0.5)), RoundNearestTiesUp) == 0
+
+        if Ti <: Signed
+            @test round(Ti, Tf(-0.5), RoundNearestTiesAway) == -1
+            @test round(Ti, prevfloat(Tf(-0.5))) == -1
+            @test round(Ti, prevfloat(Tf(-0.5)), RoundNearestTiesAway) == -1
+            @test round(Ti, prevfloat(Tf(-0.5)), RoundNearestTiesUp) == -1
+        else
+            @test_throws InexactError round(Ti, Tf(-0.5), RoundNearestTiesAway)
+            @test_throws InexactError round(Ti, prevfloat(Tf(-0.5)))
+            @test_throws InexactError round(Ti, prevfloat(Tf(-0.5)), RoundNearestTiesAway)
+            @test_throws InexactError round(Ti, prevfloat(Tf(-0.5)), RoundNearestTiesUp)
+        end
+    end
+end
 
 # numbers that can't be rounded by trunc(x+0.5)
 @test round(Int64, 2.0^52 + 1) == 4503599627370497
@@ -1603,6 +1766,19 @@ approx_eq(a, b) = approx_eq(a, b, 1e-6)
 @test approx_eq(signif(123.456,8,2), 123.5)
 @test signif(0.0, 1) === 0.0
 @test signif(-0.0, 1) === -0.0
+@test signif(1.2, 2) === 1.2
+@test signif(1.0, 6) === 1.0
+@test signif(0.6, 1) === 0.6
+@test signif(7.262839104539736, 2) === 7.3
+@test isinf(signif(Inf, 3))
+@test isnan(signif(NaN, 3))
+@test signif(1.12312, 1000) === 1.12312
+@test signif(float32(7.262839104539736), 3) === float32(7.26)
+@test signif(float32(7.262839104539736), 4) === float32(7.263)
+@test signif(float32(1.2), 3) === float32(1.2)
+@test signif(float32(1.2), 5) === float32(1.2)
+@test signif(float16(0.6), 2) === float16(0.6)
+@test signif(float16(1.1), 70) === float16(1.1)
 
 # issue #1308
 @test hex(~uint128(0)) == "f"^32
@@ -1791,7 +1967,7 @@ approx_eq(a, b) = approx_eq(a, b, 1e-6)
     9851, 9857, 9859, 9871, 9883, 9887, 9901, 9907, 9923, 9929, 9931, 9941,
     9949, 9967, 9973 ]
 
-for T in [Int,BigInt], n = [1:1000,1000000]
+for T in [Int,BigInt], n = [1:1000;1000000]
     n = convert(T,n)
     f = factor(n)
     @test n == prod(T[p^k for (p,k)=f])
@@ -1994,6 +2170,10 @@ end
 @test widen(BigInt) === BigInt
 
 @test widemul(typemax(Int64),typemax(Int64)) == 85070591730234615847396907784232501249
+@test typeof(widemul(Int64(1),UInt64(1))) == Int128
+@test typeof(widemul(UInt64(1),Int64(1))) == Int128
+@test typeof(widemul(Int128(1),UInt128(1))) == BigInt
+@test typeof(widemul(UInt128(1),Int128(1))) == BigInt
 
 # .//
 @test [1,2,3] // 4 == [1//4, 2//4, 3//4]
@@ -2029,7 +2209,7 @@ ndigf(n) = float64(log(float32(n)))
 @test digits(24, 2, 3) == [0, 0, 0, 1, 1]
 @test digits(24, 2, 7) == [0, 0, 0, 1, 1, 0, 0]
 @test digits(100) == [0, 0, 1]
-@test digits(BigInt(2)^128, 2) == [zeros(128), 1]
+@test digits(BigInt(2)^128, 2) == [zeros(128); 1]
 let a = zeros(Int, 3)
     digits!(a, 50)
     @test a == [0, 5, 0]
@@ -2053,6 +2233,86 @@ end
 @test_throws InexactError convert(Int16, big(2)^100)
 @test_throws InexactError convert(Int, typemax(UInt))
 
+# issue #9789
+@test_throws InexactError convert(Int8, typemax(UInt64))
+@test_throws InexactError convert(Int16, typemax(UInt64))
+@test_throws InexactError convert(Int, typemax(UInt64))
+
 let x = big(-0.0)
     @test signbit(x) && !signbit(abs(x))
 end
+
+# issue #9611
+@test factor(int128(2)^101+1) == Dict(3=>1,845100400152152934331135470251=>1)
+
+# test second branch, after all small primes in list have been searched
+@test factor(10009 * int128(1000000000000037)) == Dict(10009=>1,1000000000000037=>1)
+
+#Issue #5570
+@test map(x -> int(mod1(uint(x),uint(5))), 0:15) == [5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5, 1, 2, 3, 4, 5]
+
+# Issue #9618: errors thrown by large exponentiations
+@test_throws DomainError big(2)^-(big(typemax(UInt))+1)
+@test_throws OverflowError big(2)^(big(typemax(UInt))+1)
+@test 0==big(0)^(big(typemax(UInt))+1)
+
+# bswap (issue #9726)
+@test bswap(0x0002) === 0x0200
+@test bswap(0x01020304) === 0x04030201
+@test reinterpret(Float64,bswap(0x000000000000f03f)) === 1.0
+@test reinterpret(Float32,bswap(0x0000c03f)) === 1.5f0
+@test bswap(reinterpret(Float64,0x000000000000f03f)) === 1.0
+@test bswap(reinterpret(Float32,0x0000c03f)) === 1.5f0
+
+#isreal(x::Real) = true
+for x in [1.23, 7, e, 4//5] #[FP, Int, MathConst, Rat]
+    @test isreal(x) == true
+end
+
+#eltype{T<:Number}(::Type{T}) = T
+for T in [subtypes(Complex); subtypes(Real)]
+    @test eltype(T) == T
+end
+
+#ndims{T<:Number}(::Type{T}) = 0
+for x in [subtypes(Complex); subtypes(Real)]
+    @test ndims(x) == 0
+end
+
+#getindex(x::Number) = x
+for x in [1.23, 7, e, 4//5] #[FP, Int, MathConst, Rat]
+    @test getindex(x) == x
+end
+
+#copysign(x::Real, y::Real) = ifelse(signbit(x)!=signbit(y), -x, x)
+#same sign
+for x in [1.23, 7, e, 4//5]
+    for y in [1.23, 7, e, 4//5]
+        @test copysign(x,y) == x
+    end
+end
+#different sign
+for x in [1.23, 7, e, 4//5]
+    for y in [1.23, 7, e, 4//5]
+        @test copysign(x, -y) == -x
+    end
+end
+
+#angle(z::Real) = atan2(zero(z), z)
+#function only returns two values, depending on sign
+@test angle(10) == 0.0
+@test angle(-10) == 3.141592653589793
+
+#in(x::Number, y::Number) = x == y
+@test in(3,3) == true #Int
+@test in(2.0,2.0) == true #FP
+@test in(e,e) == true #Const
+@test in(4//5,4//5) == true #Rat
+@test in(1+2im, 1+2im) == true #Imag
+@test in(3, 3.0) == true #mixed
+
+#map(f::Callable, x::Number) = f(x)
+@test map(sin, 3) == sin(3)
+@test map(cos, 3) == cos(3)
+@test map(tan, 3) == tan(3)
+@test map(log, 3) == log(3)

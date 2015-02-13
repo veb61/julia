@@ -60,6 +60,35 @@ write(stdin_write, '\x03')
 write(stdin_write, "\\alpha\t")
 readuntil(stdout_read,"α")
 write(stdin_write, '\x03')
+# Test cd feature in shell mode.  We limit to 40 characters when
+# calling readuntil() to suppress the warning it (currently) gives for
+# long strings.
+origpwd = pwd()
+tmpdir = mktempdir()
+write(stdin_write, ";")
+readuntil(stdout_read, "shell> ")
+write(stdin_write, "cd $(escape_string(tmpdir))\n")
+readuntil(stdout_read, "cd $(escape_string(tmpdir))"[max(1,end-39):end])
+readuntil(stdout_read, realpath(tmpdir)[max(1,end-39):end])
+readuntil(stdout_read, "\n")
+readuntil(stdout_read, "\n")
+@test pwd() == realpath(tmpdir)
+write(stdin_write, ";")
+readuntil(stdout_read, "shell> ")
+write(stdin_write, "cd -\n")
+readuntil(stdout_read, origpwd[max(1,end-39):end])
+readuntil(stdout_read, "\n")
+readuntil(stdout_read, "\n")
+@test pwd() == origpwd
+write(stdin_write, ";")
+readuntil(stdout_read, "shell> ")
+write(stdin_write, "cd\n")
+readuntil(stdout_read, homedir()[max(1,end-39):end])
+readuntil(stdout_read, "\n")
+readuntil(stdout_read, "\n")
+@test pwd() == homedir()
+rm(tmpdir)
+cd(origpwd)
 # Close REPL ^D
 write(stdin_write, '\x04')
 wait(repltask)
@@ -139,6 +168,19 @@ begin
     @test LineEdit.mode(s) == repl_mode
     @test buffercontents(LineEdit.buffer(s)) == "2 + 2"
     LineEdit.history_next(s, hp)
+
+    # Test that the same holds for prefix search
+    ps = LineEdit.state(s,interface.modes[5])
+    LineEdit.history_prev_prefix(ps, hp, "")
+    @test ps.parent == repl_mode
+    @test LineEdit.input_string(ps) == "2 + 2"
+    LineEdit.history_prev_prefix(ps, hp, "")
+    @test ps.parent == shell_mode
+    @test LineEdit.input_string(ps) == "ls"
+    LineEdit.history_prev_prefix(ps, hp, "sh")
+    @test ps.parent == repl_mode
+    @test LineEdit.input_string(ps) == "shell"
+    LineEdit.history_next_prefix(ps, hp, "sh")
 
     # Test that searching backwards puts you into the correct mode and
     # skips invalid modes.

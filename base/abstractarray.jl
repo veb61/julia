@@ -6,12 +6,48 @@ typealias AbstractVecOrMat{T} Union(AbstractVector{T}, AbstractMatrix{T})
 
 ## Basic functions ##
 
+vect() = Array(Any, 0)
+vect{T}(X::T...) = T[ X[i] for i=1:length(X) ]
+
+const _oldstyle_array_vcat_ = true
+
+if _oldstyle_array_vcat_
+    function oldstyle_vcat_warning(n::Int)
+        if n == 1
+            before = "a"
+            after  = "a;"
+        elseif n == 2
+            before = "a,b"
+            after  = "a;b"
+        else
+            before = "a,b,..."
+            after  = "a;b;..."
+        end
+        depwarn("[$before] concatenation is deprecated; use [$after] instead", :vect)
+    end
+    function vect(A::AbstractArray...)
+        oldstyle_vcat_warning(length(A))
+        vcat(A...)
+    end
+    function vect(X...)
+        for a in X
+            if typeof(a) <: AbstractArray
+                oldstyle_vcat_warning(length(X))
+                break
+            end
+        end
+        vcat(X...)
+    end
+else
+    function vect(X...)
+        T = promote_typeof(X...)
+        T[ X[i] for i=1:length(X) ]
+    end
+end
+
 size{T,n}(t::AbstractArray{T,n}, d) = d <= n ? size(t)[d] : 1
 size(x, d1::Integer, d2::Integer, dx::Integer...) = tuple(size(x, d1), size(x, d2, dx...)...)
-eltype(x) = Any
-eltype{T,n}(::AbstractArray{T,n}) = T
 eltype{T,n}(::Type{AbstractArray{T,n}}) = T
-eltype{T<:AbstractArray}(::Type{T}) = eltype(super(T))
 iseltype(x,T) = eltype(x) <: T
 elsize{T}(::AbstractArray{T}) = sizeof(T)
 isinteger(x::AbstractArray) = all(isinteger,x)
@@ -24,8 +60,10 @@ ndims{T<:AbstractArray}(::Type{T}) = ndims(super(T))
 length(t::AbstractArray) = prod(size(t))::Int
 endof(a::AbstractArray) = length(a)
 first(a::AbstractArray) = a[1]
-first(a) = next(a,start(a))[1]
+first(a) = (s = start(a); done(a, s) ? throw(ArgumentError("collection must be non-empty")) : next(a, s)[1])
 last(a) = a[end]
+ctranspose(a::AbstractArray) = error("ctranspose not implemented for $(typeof(a)). Consider adding parentheses, e.g. A*(B*C') instead of A*B*C' to avoid explicit calculation of the transposed matrix.")
+transpose(a::AbstractArray) = error("transpose not implemented for $(typeof(a)). Consider adding parentheses, e.g. A*(B*C.') instead of A*B*C' to avoid explicit calculation of the transposed matrix.")
 
 function stride(a::AbstractArray, i::Integer)
     if i > ndims(a)
@@ -73,6 +111,7 @@ linearindexing{A<:Array}(::Type{A}) = LinearFast()
 linearindexing{A<:Range}(::Type{A}) = LinearFast()
 
 ## Bounds checking ##
+checkbounds(sz::Int, ::Colon) = nothing
 checkbounds(sz::Int, i::Int) = 1 <= i <= sz || throw(BoundsError())
 checkbounds(sz::Int, i::Real) = checkbounds(sz, to_index(i))
 checkbounds(sz::Int, I::AbstractVector{Bool}) = length(I) == sz || throw(BoundsError())
@@ -89,17 +128,17 @@ checkbounds(A::AbstractArray, I::AbstractArray{Bool}) = size(A) == size(I) || th
 
 checkbounds(A::AbstractArray, I) = checkbounds(length(A), I)
 
-function checkbounds(A::AbstractMatrix, I::Union(Real,AbstractArray), J::Union(Real,AbstractArray))
+function checkbounds(A::AbstractMatrix, I::Union(Real,Colon,AbstractArray), J::Union(Real,Colon,AbstractArray))
     checkbounds(size(A,1), I)
     checkbounds(size(A,2), J)
 end
 
-function checkbounds(A::AbstractArray, I::Union(Real,AbstractArray), J::Union(Real,AbstractArray))
+function checkbounds(A::AbstractArray, I::Union(Real,Colon,AbstractArray), J::Union(Real,Colon,AbstractArray))
     checkbounds(size(A,1), I)
     checkbounds(trailingsize(A,2), J)
 end
 
-function checkbounds(A::AbstractArray, I::Union(Real,AbstractArray)...)
+function checkbounds(A::AbstractArray, I::Union(Real,Colon,AbstractArray)...)
     n = length(I)
     if n > 0
         for dim = 1:(n-1)
@@ -134,7 +173,7 @@ similar   (a::AbstractArray, T, dims::Int...) = similar(a, T, dims)
 
 function reshape(a::AbstractArray, dims::Dims)
     if prod(dims) != length(a)
-        error("dimensions must be consistent with array size")
+        throw(ArgumentError("dimensions must be consistent with array size"))
     end
     copy!(similar(a, dims), a)
 end
@@ -149,10 +188,10 @@ _sub(t::Tuple, s::Tuple) = _sub(tail(t), tail(s))
 
 function squeeze(A::AbstractArray, dims::Dims)
     for i in 1:length(dims)
-        1 <= dims[i] <= ndims(A) || error("squeezed dims must be in range 1:ndims(A)")
-        size(A, dims[i]) == 1 || error("squeezed dims must all be size 1")
+        1 <= dims[i] <= ndims(A) || throw(ArgumentError("squeezed dims must be in range 1:ndims(A)"))
+        size(A, dims[i]) == 1 || throw(ArgumentError("squeezed dims must all be size 1"))
         for j = 1:i-1
-            dims[j] == dims[i] && error("squeezed dims must be unique")
+            dims[j] == dims[i] && throw(ArgumentError("squeezed dims must be unique"))
         end
     end
     d = ()
@@ -177,8 +216,23 @@ end
 
 # copy with minimal requirements on src
 # if src is not an AbstractArray, moving to the offset might be O(n)
-function copy!(dest::AbstractArray, doffs::Integer, src, soffs::Integer=1)
-    soffs < 1 && throw(BoundsError())
+function copy!(dest::AbstractArray, doffs::Integer, src)
+    doffs < 1 && throw(BoundsError())
+    st = start(src)
+    i, dmax = doffs, length(dest)
+    @inbounds while !done(src, st)
+        i > dmax && throw(BoundsError())
+        val, st = next(src, st)
+        dest[i] = val
+        i += 1
+    end
+    return dest
+end
+
+function copy!(dest::AbstractArray, doffs::Integer, src, soffs::Integer)
+    if (doffs < 1) | (soffs < 1)
+        throw(BoundsError())
+    end
     st = start(src)
     for j = 1:(soffs-1)
         done(src, st) && throw(BoundsError())
@@ -186,8 +240,9 @@ function copy!(dest::AbstractArray, doffs::Integer, src, soffs::Integer=1)
     end
     dn = done(src, st)
     dn && throw(BoundsError())
-    i = doffs
-    while !dn
+    i, dmax = doffs, length(dest)
+   @inbounds while !dn
+        i > dmax && throw(BoundsError())
         val, st = next(src, st)
         dest[i] = val
         i += 1
@@ -200,28 +255,40 @@ end
 function copy!(dest::AbstractArray, doffs::Integer, src, soffs::Integer, n::Integer)
     n < 0 && throw(BoundsError())
     n == 0 && return dest
-    soffs < 1 && throw(BoundsError())
+    dmax = doffs + n - 1
+    if (dmax > length(dest)) | (doffs < 1) | (soffs < 1)
+        throw(BoundsError())
+    end
     st = start(src)
     for j = 1:(soffs-1)
         done(src, st) && throw(BoundsError())
         _, st = next(src, st)
     end
-    for i = doffs:(doffs+n-1)
-        done(src, st) && throw(BoundsError())
+    i = doffs
+    @inbounds while i <= dmax && !done(src, st)
         val, st = next(src, st)
         dest[i] = val
+        i += 1
     end
+    i <= dmax && throw(BoundsError())
     return dest
 end
 
 # if src is an AbstractArray and a source offset is passed, use indexing
+function copy!(dest::AbstractArray, doffs::Integer, src::AbstractArray)
+    copy!(dest, doffs, src, 1, length(src))
+end
 function copy!(dest::AbstractArray, doffs::Integer, src::AbstractArray, soffs::Integer)
     soffs > length(src) && throw(BoundsError())
     copy!(dest, doffs, src, soffs, length(src)-soffs+1)
 end
 function copy!(dest::AbstractArray, doffs::Integer, src::AbstractArray, soffs::Integer, n::Integer)
     n < 0 && throw(BoundsError())
-    for i = 0:(n-1)
+    n == 0 && return dest
+    if soffs+n-1 > length(src) || doffs+n-1 > length(dest) || doffs < 1 || soffs < 1
+        throw(BoundsError())
+    end
+    @inbounds for i = 0:(n-1)
         dest[doffs+i] = src[soffs+i]
     end
     return dest
@@ -231,7 +298,7 @@ copy(a::AbstractArray) = copy!(similar(a), a)
 
 function copy!{R,S}(B::AbstractVecOrMat{R}, ir_dest::Range{Int}, jr_dest::Range{Int}, A::AbstractVecOrMat{S}, ir_src::Range{Int}, jr_src::Range{Int})
     if length(ir_dest) != length(ir_src) || length(jr_dest) != length(jr_src)
-        error("source and destination must have same size")
+        throw(ArgumentError("source and destination must have same size"))
     end
     checkbounds(B, ir_dest, jr_dest)
     checkbounds(A, ir_src, jr_src)
@@ -249,7 +316,7 @@ end
 
 function copy_transpose!{R,S}(B::AbstractVecOrMat{R}, ir_dest::Range{Int}, jr_dest::Range{Int}, A::AbstractVecOrMat{S}, ir_src::Range{Int}, jr_src::Range{Int})
     if length(ir_dest) != length(jr_src) || length(jr_dest) != length(ir_src)
-        error("source and destination must have same size")
+        throw(ArgumentError("source and destination must have same size"))
     end
     checkbounds(B, ir_dest, jr_dest)
     checkbounds(A, ir_src, jr_src)
@@ -418,7 +485,7 @@ slicedim(A::AbstractArray, d::Integer, i) =
     A[[ n==d ? i : (1:size(A,n)) for n in 1:ndims(A) ]...]
 
 function flipdim(A::AbstractVector, d::Integer)
-    d > 0 || error("dimension to flip must be positive")
+    d > 0 || throw(ArgumentError("dimension to flip must be positive"))
     d == 1 || return copy(A)
     reverse(A)
 end
@@ -457,7 +524,7 @@ function circshift{T,N}(a::AbstractArray{T,N}, shiftamts)
     for i=1:N
         s = size(a,i)
         d = i<=length(shiftamts) ? shiftamts[i] : 0
-        I = tuple(I..., d==0 ? [1:s] : mod([-d:s-1-d], s).+1)
+        I = tuple(I..., d==0 ? [1:s;] : mod([-d:s-1-d;], s).+1)
     end
     a[(I::NTuple{N,Vector{Int}})...]
 end
@@ -546,18 +613,12 @@ vcat{T}(X::T...)         = T[ X[i] for i=1:length(X) ]
 vcat{T<:Number}(X::T...) = T[ X[i] for i=1:length(X) ]
 
 function vcat(X::Number...)
-    T = Bottom
-    for x in X
-        T = promote_type(T,typeof(x))
-    end
+    T = promote_typeof(X...)
     hvcat_fill(Array(T,length(X)), X)
 end
 
 function hcat(X::Number...)
-    T = Bottom
-    for x in X
-        T = promote_type(T,typeof(x))
-    end
+    T = promote_typeof(X...)
     hvcat_fill(Array(T,1,length(X)), X)
 end
 
@@ -584,10 +645,12 @@ function hcat{T}(A::AbstractVecOrMat{T}...)
     dense = true
     for j = 1:nargs
         Aj = A[j]
+        if size(Aj, 1) != nrows
+            throw(ArgumentError("number of rows must match"))
+        end
         dense &= isa(Aj,Array)
         nd = ndims(Aj)
         ncols += (nd==2 ? size(Aj,2) : 1)
-        if size(Aj, 1) != nrows; error("number of rows must match"); end
     end
     B = similar(full(A[1]), nrows, ncols)
     pos = 1
@@ -614,7 +677,9 @@ function vcat{T}(A::AbstractMatrix{T}...)
     nrows = sum(a->size(a, 1), A)::Int
     ncols = size(A[1], 2)
     for j = 2:nargs
-        if size(A[j], 2) != ncols; error("number of columns must match"); end
+        if size(A[j], 2) != ncols
+            throw(ArgumentError("number of columns must match"))
+        end
     end
     B = similar(full(A[1]), nrows, ncols)
     pos = 1
@@ -628,7 +693,13 @@ function vcat{T}(A::AbstractMatrix{T}...)
 end
 
 ## cat: general case
+
 function cat(catdims, X...)
+    T = promote_type(map(x->isa(x,AbstractArray) ? eltype(x) : typeof(x), X)...)
+    cat_t(catdims, T, X...)
+end
+
+function cat_t(catdims, typeC::Type, X...)
     catdims = collect(catdims)
     nargs = length(X)
     ndimsX = Int[isa(a,AbstractArray) ? ndims(a) : 0 for a in X]
@@ -639,17 +710,15 @@ function cat(catdims, X...)
         dims2cat[catdims[k]]=k
     end
 
-    typeC = isa(X[1],AbstractArray) ? eltype(X[1]) : typeof(X[1])
     dimsC = Int[d <= ndimsX[1] ? size(X[1],d) : 1 for d=1:ndimsC]
     for k = 1:length(catdims)
         catsizes[1,k] = dimsC[catdims[k]]
     end
     for i = 2:nargs
-        typeC = promote_type(typeC, isa(X[i], AbstractArray) ? eltype(X[i]) : typeof(X[i]))
         for d = 1:ndimsC
             currentdim = (d <= ndimsX[i] ? size(X[i],d) : 1)
             if dims2cat[d]==0
-                dimsC[d] == currentdim || error("mismatch in dimension ", d)
+                dimsC[d] == currentdim || throw(DimensionMismatch("mismatch in dimension $(d)"))
             else
                 dimsC[d] += currentdim
                 catsizes[i,dims2cat[d]] = currentdim
@@ -676,56 +745,18 @@ end
 vcat(X...) = cat(1, X...)
 hcat(X...) = cat(2, X...)
 
+typed_vcat(T::Type, X...) = cat_t(1, T, X...)
+typed_hcat(T::Type, X...) = cat_t(2, T, X...)
+
 cat{T}(catdims, A::AbstractArray{T}...) = cat_t(catdims, T, A...)
 
-cat(catdims, A::AbstractArray...) =
-    cat_t(catdims, promote_eltype(A...), A...)
-
-function cat_t(catdims, typeC, A::AbstractArray...)
-    catdims = collect(catdims)
-    nargs = length(A)
-    ndimsA = Int[ndims(a) for a in A]
-    ndimsC = max(maximum(ndimsA), maximum(catdims))
-    catsizes = zeros(Int,(nargs,length(catdims)))
-    dims2cat = zeros(Int,ndimsC)
-    for k = 1:length(catdims)
-        dims2cat[catdims[k]]=k
-    end
-
-    dimsC = Int[d <= ndimsA[1] ? size(A[1],d) : 1 for d=1:ndimsC]
-    for k = 1:length(catdims)
-        catsizes[1,k] = dimsC[catdims[k]]
-    end
-    for i = 2:nargs
-        for d = 1:ndimsC
-            currentdim = (d <= ndimsA[i] ? size(A[i],d) : 1)
-            if dims2cat[d]==0
-                dimsC[d] == currentdim || error("mismatch in dimension ", d)
-            else
-                dimsC[d] += currentdim
-                catsizes[i,dims2cat[d]] = currentdim
-            end
-        end
-    end
-
-    C = similar(full(A[1]), typeC, tuple(dimsC...))
-    if length(catdims)>1
-        fill!(C,0)
-    end
-
-    offsets = zeros(Int,length(catdims))
-    for i=1:nargs
-        cat_one = [ dims2cat[d]==0 ? (1:dimsC[d]) : (offsets[dims2cat[d]]+(1:catsizes[i,dims2cat[d]])) for d=1:ndimsC]
-        C[cat_one...] = A[i]
-        for k = 1:length(catdims)
-            offsets[k] += catsizes[i,k]
-        end
-    end
-    return C
-end
+cat(catdims, A::AbstractArray...) = cat_t(catdims, promote_eltype(A...), A...)
 
 vcat(A::AbstractArray...) = cat(1, A...)
 hcat(A::AbstractArray...) = cat(2, A...)
+
+typed_vcat(T::Type, A::AbstractArray...) = cat_t(1, T, A...)
+typed_hcat(T::Type, A::AbstractArray...) = cat_t(2, T, A...)
 
 # 2d horizontal and vertical concatenation
 
@@ -733,7 +764,7 @@ function hvcat(nbc::Integer, as...)
     # nbc = # of block columns
     n = length(as)
     if mod(n,nbc) != 0
-        error("all rows must have the same number of block columns")
+        throw(ArgumentError("all rows must have the same number of block columns"))
     end
     nbr = div(n,nbc)
     hvcat(ntuple(nbr, i->nbc), as...)
@@ -765,16 +796,16 @@ function hvcat{T}(rows::(Int...), as::AbstractMatrix{T}...)
             Aj = as[a+j-1]
             szj = size(Aj,2)
             if size(Aj,1) != szi
-                error("mismatched height in block row ", i)
+                throw(ArgumentError("mismatched height in block row $(i)"))
             end
             if c-1+szj > nc
-                error("block row ", i, " has mismatched number of columns")
+                throw(ArgumentError("block row $(i) has mismatched number of columns"))
             end
             out[r:r-1+szi, c:c-1+szj] = Aj
             c += szj
         end
         if c != nc+1
-            error("block row ", i, " has mismatched number of columns")
+            throw(ArgumentError("block row $(i) has mismatched number of columns"))
         end
         r += szi
         a += rows[i]
@@ -790,12 +821,12 @@ function hvcat{T<:Number}(rows::(Int...), xs::T...)
 
     a = Array(T, nr, nc)
     if length(a) != length(xs)
-        error("argument count does not match specified shape")
+        throw(ArgumentError("argument count does not match specified shape"))
     end
     k = 1
     @inbounds for i=1:nr
         if nc != rows[i]
-            error("row ", i, " has mismatched number of columns")
+            throw(ArgumentError("row $(i) has mismatched number of columns"))
         end
         for j=1:nc
             a[i,j] = xs[k]
@@ -817,23 +848,47 @@ function hvcat_fill(a, xs)
     a
 end
 
-function hvcat(rows::(Int...), xs::Number...)
+function typed_hvcat(T::Type, rows::(Int...), xs::Number...)
     nr = length(rows)
     nc = rows[1]
-    #error check
     for i = 2:nr
         if nc != rows[i]
-            error("row ", i, " has mismatched number of columns")
+            throw(ArgumentError("row $(i) has mismatched number of columns"))
         end
     end
-    T = typeof(xs[1])
-    for i=2:length(xs)
-        T = promote_type(T,typeof(xs[i]))
-    end
-    if nr*nc != length(xs)
-        error("argument count does not match specified shape")
+    len = length(xs)
+    if nr*nc != len
+        throw(ArgumentError("argument count $(len) does not match specified shape $((nr,nc))"))
     end
     hvcat_fill(Array(T, nr, nc), xs)
+end
+
+function hvcat(rows::(Int...), xs::Number...)
+    T = promote_typeof(xs...)
+    typed_hvcat(T, rows, xs...)
+end
+
+# fallback definition of hvcat in terms of hcat and vcat
+function hvcat(rows::(Int...), as...)
+    nbr = length(rows)  # number of block rows
+    rs = cell(nbr)
+    a = 1
+    for i = 1:nbr
+        rs[i] = hcat(as[a:a-1+rows[i]]...)
+        a += rows[i]
+    end
+    vcat(rs...)
+end
+
+function typed_hvcat(T::Type, rows::(Int...), as...)
+    nbr = length(rows)  # number of block rows
+    rs = cell(nbr)
+    a = 1
+    for i = 1:nbr
+        rs[i] = hcat(as[a:a-1+rows[i]]...)
+        a += rows[i]
+    end
+    T[rs...;]
 end
 
 ## Reductions and scans ##
@@ -947,18 +1002,6 @@ function ipermutedims(A::AbstractArray,perm)
 end
 
 ## Other array functions ##
-
-# fallback definition of hvcat in terms of hcat and vcat
-function hvcat(rows::(Int...), as...)
-    nbr = length(rows)  # number of block rows
-    rs = cell(nbr)
-    a = 1
-    for i = 1:nbr
-        rs[i] = hcat(as[a:a-1+rows[i]]...)
-        a += rows[i]
-    end
-    vcat(rs...)
-end
 
 function repmat(a::AbstractVecOrMat, m::Int, n::Int=1)
     o, p = size(a,1), size(a,2)
@@ -1087,8 +1130,7 @@ function repeat{T}(A::Array{T};
     ndims_out = max(ndims_in, length_inner, length_outer)
 
     if length_inner < ndims_in || length_outer < ndims_in
-        msg = "inner/outer repetitions must be set for all input dimensions"
-        throw(ArgumentError(msg))
+        throw(ArgumentError("inner/outer repetitions must be set for all input dimensions"))
     end
 
     size_in = Array(Int, ndims_in)
@@ -1151,7 +1193,7 @@ function cartesianmap(body, t::(Int...), it...)
             end
         end
     else
-        throw(ArgumentError("cartesianmap"))
+        throw(ArgumentError("cartesianmap length(t) - length(it) ≤ 0"))
     end
 end
 
@@ -1183,7 +1225,7 @@ end
 
 ##
 # generic map on any iterator
-function map(f::Callable, iters...)
+function map(f, iters...)
     result = []
     len = length(iters)
     states = [start(iters[idx]) for idx in 1:len]
@@ -1217,7 +1259,7 @@ function mapslices(f::Function, A::AbstractArray, dims::AbstractVector)
 
     dimsA = [size(A)...]
     ndimsA = ndims(A)
-    alldims = [1:ndimsA]
+    alldims = [1:ndimsA;]
 
     otherdims = setdiff(alldims, dims)
 
@@ -1265,7 +1307,7 @@ end
 
 
 # using promote_type
-function promote_to!{T}(f::Callable, offs, dest::AbstractArray{T}, A::AbstractArray)
+function promote_to!{T}(f, offs, dest::AbstractArray{T}, A::AbstractArray)
     # map to dest array, checking the type of each result. if a result does not
     # match, do a type promotion and re-dispatch.
     @inbounds for i = offs:length(A)
@@ -1287,7 +1329,7 @@ function promote_to!{T}(f::Callable, offs, dest::AbstractArray{T}, A::AbstractAr
     return dest
 end
 
-function map_promote(f::Callable, A::AbstractArray)
+function map_promote(f, A::AbstractArray)
     if isempty(A); return similar(A, Bottom); end
     first = f(A[1])
     dest = similar(A, typeof(first))
@@ -1296,7 +1338,15 @@ function map_promote(f::Callable, A::AbstractArray)
 end
 
 ## 1 argument
-function map_to!{T}(f::Callable, offs, dest::AbstractArray{T}, A::AbstractArray)
+map!(f, A::AbstractArray) = map!(f, A, A)
+function map!(f, dest::AbstractArray, A::AbstractArray)
+    for i = 1:length(A)
+        dest[i] = f(A[i])
+    end
+    return dest
+end
+
+function map_to!{T}(f, offs, dest::AbstractArray{T}, A::AbstractArray)
     # map to dest array, checking the type of each result. if a result does not
     # match, widen the result type and re-dispatch.
     @inbounds for i = offs:length(A)
@@ -1315,7 +1365,7 @@ function map_to!{T}(f::Callable, offs, dest::AbstractArray{T}, A::AbstractArray)
     return dest
 end
 
-function map(f::Callable, A::AbstractArray)
+function map(f, A::AbstractArray)
     if isempty(A); return similar(A); end
     first = f(A[1])
     dest = similar(A, typeof(first))
@@ -1324,7 +1374,14 @@ function map(f::Callable, A::AbstractArray)
 end
 
 ## 2 argument
-function map_to!{T}(f::Callable, offs, dest::AbstractArray{T}, A::AbstractArray, B::AbstractArray)
+function map!(f, dest::AbstractArray, A::AbstractArray, B::AbstractArray)
+    for i = 1:length(A)
+        dest[i] = f(A[i], B[i])
+    end
+    return dest
+end
+
+function map_to!{T}(f, offs, dest::AbstractArray{T}, A::AbstractArray, B::AbstractArray)
     @inbounds for i = offs:length(A)
         el = f(A[i], B[i])
         S = typeof(el)
@@ -1340,7 +1397,7 @@ function map_to!{T}(f::Callable, offs, dest::AbstractArray{T}, A::AbstractArray,
     return dest
 end
 
-function map(f::Callable, A::AbstractArray, B::AbstractArray)
+function map(f, A::AbstractArray, B::AbstractArray)
     shp = promote_shape(size(A),size(B))
     if prod(shp) == 0
         return similar(A, promote_type(eltype(A),eltype(B)), shp)
@@ -1352,7 +1409,17 @@ function map(f::Callable, A::AbstractArray, B::AbstractArray)
 end
 
 ## N argument
-function map_to!{T}(f::Callable, offs, dest::AbstractArray{T}, As::AbstractArray...)
+function map!(f, dest::AbstractArray, As::AbstractArray...)
+    n = length(As[1])
+    i = 1
+    ith = a->a[i]
+    for i = 1:n
+        dest[i] = f(map(ith, As)...)
+    end
+    return dest
+end
+
+function map_to!{T}(f, offs, dest::AbstractArray{T}, As::AbstractArray...)
     local i
     ith = a->a[i]
     @inbounds for i = offs:length(As[1])
@@ -1370,7 +1437,7 @@ function map_to!{T}(f::Callable, offs, dest::AbstractArray{T}, As::AbstractArray
     return dest
 end
 
-function map(f::Callable, As::AbstractArray...)
+function map(f, As::AbstractArray...)
     shape = mapreduce(size, promote_shape, As)
     if prod(shape) == 0
         return similar(As[1], promote_eltype(As...), shape)

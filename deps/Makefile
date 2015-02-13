@@ -32,14 +32,14 @@ endif
 MAKE_COMMON = DESTDIR="" prefix=$(build_prefix) bindir=$(build_bindir) libdir=$(build_libdir) libexecdir=$(build_libexecdir) datarootdir=$(build_datarootdir) includedir=$(build_includedir) sysconfdir=$(build_sysconfdir)
 
 #autoconf configure-driven scripts: llvm pcre arpack fftw unwind gmp mpfr patchelf uv
-#custom Makefile rules: openlibm Rmath dsfmt suitesparse-wrapper suitesparse lapack openblas mojibake objconv
+#custom Makefile rules: openlibm Rmath-julia dsfmt suitesparse-wrapper suitesparse lapack openblas mojibake objconv
 #CMake libs: libgit2
 
 # prevent installing libs into usr/lib64 on opensuse
 unexport CONFIG_SITE
 
 STAGE1_DEPS =
-STAGE2_DEPS = Rmath
+STAGE2_DEPS = Rmath-julia
 STAGE3_DEPS = suitesparse-wrapper
 
 ifeq ($(USE_SYSTEM_LIBUV), 0)
@@ -163,7 +163,7 @@ install: $(addprefix install-, $(DEP_LIBS))
 cleanall: $(addprefix clean-, $(DEP_LIBS))
 distcleanall: $(addprefix distclean-, $(DEP_LIBS))
 	rm -rf $(build_prefix)
-getall: get-llvm get-uv get-pcre get-openlibm get-openspecfun get-dsfmt get-Rmath get-openblas get-lapack get-fftw get-suitesparse get-arpack get-unwind get-osxunwind get-gmp get-mpfr get-patchelf get-mojibake get-virtualenv get-objconv get-libgit2
+getall: get-llvm get-uv get-pcre get-openlibm get-openspecfun get-dsfmt get-Rmath-julia get-openblas get-lapack get-fftw get-suitesparse get-arpack get-unwind get-osxunwind get-gmp get-mpfr get-patchelf get-mojibake get-virtualenv get-objconv get-libgit2
 
 ## PATHS ##
 # sort is used to remove potential duplicates
@@ -279,6 +279,7 @@ else
 LLVM_FLAGS += --disable-threads
 endif # USE_INTEL_JITEVENTS
 
+ifeq ($(BUILD_LLDB),1)
 ifeq ($(USECLANG),1)
 LLVM_FLAGS += --enable-cxx11
 else
@@ -287,6 +288,7 @@ endif # USECLANG
 ifeq ($(LLDB_DISABLE_PYTHON),1)
 LLVM_CXXFLAGS += -DLLDB_DISABLE_PYTHON
 endif # LLDB_DISABLE_PYTHON
+endif # BUILD_LLDB
 
 ifeq ($(ARCH), ppc64)
 LLVM_CXXFLAGS += -mminimal-toc
@@ -370,6 +372,10 @@ endif
 
 ifeq ($(BUILD_CUSTOM_LIBCXX),1)
 
+ifeq ($(USEICC),1)
+LIBCXX_EXTRA_FLAGS = -Bstatic -lirc -Bdynamic
+endif
+
 llvm-$(LLVM_VER)/projects/libcxx: $(LLVM_LIBCXX_TAR) | llvm-svn/configure
 	([ ! -d llvm-$(LLVM_VER)/projects/libcxx ] && \
 	git clone $(LLVM_GIT_URL_LIBCXX) llvm-$(LLVM_VER)/projects/libcxx  ) || \
@@ -384,14 +390,14 @@ libcxx-build:
 	mkdir -p libcxx-build
 libcxx-build/Makefile: llvm-$(LLVM_VER)/projects/libcxx | llvm-$(LLVM_VER)/projects/libcxxabi libcxx-build
 	cd libcxx-build && \
-		$(CMAKE) -G "Unix Makefiles" $(CMAKE_COMMON) -DLIBCXX_CXX_ABI=libcxxabi -DLIBCXX_LIBCXXABI_INCLUDE_PATHS="../llvm-$(LLVM_VER)/projects/libcxxabi/include" ../llvm-$(LLVM_VER)/projects/libcxx -DCMAKE_SHARED_LINKER_FLAGS="-L$(build_libdir) -Bstatic -lirc -Bdynamic" -DCMAKE_CXX_FLAGS="$(CXXFLAGS)"
+		$(CMAKE) -G "Unix Makefiles" $(CMAKE_COMMON) -DLIBCXX_CXX_ABI=libcxxabi -DLIBCXX_LIBCXXABI_INCLUDE_PATHS="../llvm-$(LLVM_VER)/projects/libcxxabi/include" ../llvm-$(LLVM_VER)/projects/libcxx -DCMAKE_SHARED_LINKER_FLAGS="-L$(build_libdir) $(LIBCXX_EXTRA_FLAGS)" -DCMAKE_CXX_FLAGS="$(CXXFLAGS)"
 libcxxabi-build:
 	mkdir -p libcxxabi-build
-libcxxabi-build/Makefile: llvm-$(LLVM_VER)/projects/libcxxabi | libcxxabi-build
+libcxxabi-build/Makefile: llvm-$(LLVM_VER)/projects/libcxxabi | llvm-$(LLVM_VER)/projects/libcxx libcxxabi-build
 	cd libcxxabi-build && \
-        $(CMAKE) -G "Unix Makefiles" $(CMAKE_COMMON) -DLLVM_MAIN_SRC_DIR=../llvm-svn ../llvm-$(LLVM_VER)/projects/libcxxabi -DLIBCXXABI_CXX_ABI_LIBRARIES="-Bstatic -lirc -Bdynamic" -DCMAKE_CXX_FLAGS="$(CXXFLAGS) -std=c++11"
+        $(CMAKE) -G "Unix Makefiles" $(CMAKE_COMMON) -DLLVM_PATH="../llvm-$(LLVM_VER)" ../llvm-$(LLVM_VER)/projects/libcxxabi -DLIBCXXABI_CXX_ABI_LIBRARIES="$(LIBCXX_EXTRA_FLAGS)" -DCMAKE_CXX_FLAGS="$(CXXFLAGS) -std=c++11"
 llvm-$(LLVM_VER)/projects/libcxxabi/lib/libc++abi.so.1.0: llvm-$(LLVM_VER)/projects/libcxxabi | llvm-$(LLVM_VER)/projects/libcxx
-libcxxabi-build/libc++abi.so.1.0: | libcxxabi-build/Makefile
+libcxxabi-build/lib/libc++abi.so.1.0: | libcxxabi-build/Makefile
 	cd libcxxabi-build && $(MAKE)
 $(build_libdir)/libc++abi.so.1.0: libcxxabi-build/lib/libc++abi.so.1.0
 	cd libcxxabi-build && $(MAKE) install
@@ -548,6 +554,11 @@ check-llvm: llvm-$(LLVM_VER)/build_$(LLVM_BUILDTYPE)/checked
 install-llvm: $(LLVM_OBJ_TARGET)
 #todo: LLVM make check target is broken on julia.mit.edu (and really slow elsewhere)
 
+update-llvm:
+	(cd llvm-$(LLVM_VER); git pull --ff-only)
+	([ -d llvm-$(LLVM_VER)/tools/clang ] && (cd llvm-$(LLVM_VER)/tools/clang; git pull --ff-only))
+	([ -d llvm-$(LLVM_VER)/projects/compiler-rt ] && (cd llvm-$(LLVM_VER)/projects/compiler-rt; git pull --ff-only))
+	([ -d llvm-$(LLVM_VER)/tools/lldb ] && (cd llvm-$(LLVM_VER)/tools/lldb; git pull --ff-only))
 
 ## LIBUV ##
 
@@ -780,46 +791,43 @@ check-dsfmt: compile-dsfmt
 install-dsfmt: $(DSFMT_OBJ_TARGET)
 
 
-## Rmath ##
+## Rmath-julia ##
 
 ifeq ($(USE_SYSTEM_DSFMT),0)
 DSFMT_FAKE_TARGET = $(DSFMT_OBJ_TARGET)
 endif
 
-RMATH_OBJ_TARGET = $(build_shlibdir)/libRmath-julia.$(SHLIB_EXT)
-RMATH_OBJ_SOURCE = Rmath/src/libRmath-julia.$(SHLIB_EXT)
+RMATH_JULIA_OBJ_TARGET = $(build_shlibdir)/libRmath-julia.$(SHLIB_EXT)
+RMATH_JULIA_OBJ_SOURCE = Rmath-julia-$(RMATH_JULIA_VER)/src/libRmath-julia.$(SHLIB_EXT)
 
-RMATH_FLAGS += CC="$(CC)" USECLANG=$(USECLANG) USEGCC=$(USEGCC) \
+RMATH_JULIA_FLAGS += CC="$(CC)" USECLANG=$(USECLANG) USEGCC=$(USEGCC) \
 			   OS="$(OS)" ARCH="$(ARCH)" \
 			   USE_DSFMT=1 DSFMT_libdir="$(build_shlibdir)" \
 			   DSFMT_includedir="$(build_includedir)"
 
-Rmath/Make.inc:
-	(cd .. && git submodule init && git submodule update)
-ifeq (exists, $(shell [ -d Rmath/.git ] && echo exists ))
-$(RMATH_OBJ_SOURCE): Rmath/.git/HEAD
-endif
-ifeq (exists, $(shell [ -d $(JULIAHOME)/.git/modules/deps/Rmath ] && echo exists ))
-$(RMATH_OBJ_SOURCE): $(JULIAHOME)/.git/modules/deps/Rmath/HEAD
-endif
-$(RMATH_OBJ_SOURCE): Rmath/Make.inc $(DSFMT_FAKE_TARGET)
-	$(MAKE) -C Rmath/src $(RMATH_FLAGS) $(MAKE_COMMON)
+Rmath-julia-$(RMATH_JULIA_VER).tar.gz:
+	$(JLDOWNLOAD) $@ https://github.com/JuliaLang/Rmath-julia/archive/v$(RMATH_JULIA_VER).tar.gz
+$(RMATH_JULIA_OBJ_SOURCE): Rmath-julia-$(RMATH_JULIA_VER).tar.gz $(DSFMT_FAKE_TARGET)
+	$(JLCHECKSUM) Rmath-julia-$(RMATH_JULIA_VER).tar.gz && \
+	mkdir -p Rmath-julia-$(RMATH_JULIA_VER) && \
+	$(TAR) -C Rmath-julia-$(RMATH_JULIA_VER) --strip-components 1 -xf $< && \
+	$(MAKE) -C Rmath-julia-$(RMATH_JULIA_VER)/src $(RMATH_JULIA_FLAGS) $(MAKE_COMMON) && \
 	touch -c $@
-$(RMATH_OBJ_TARGET): $(RMATH_OBJ_SOURCE) | $(build_shlibdir)
+$(RMATH_JULIA_OBJ_TARGET): $(RMATH_JULIA_OBJ_SOURCE) | $(build_shlibdir)
 	cp $< $@
 	$(INSTALL_NAME_CMD)libRmath-julia.$(SHLIB_EXT) $@
 
-clean-Rmath:
-	-$(MAKE) -C Rmath/src clean
-	-rm $(RMATH_OBJ_TARGET)
-distclean-Rmath: clean-Rmath
-	-cd Rmath && git clean -fdx
+clean-Rmath-julia:
+	-$(MAKE) -C Rmath-julia-$(RMATH_JULIA_VER) clean
+	-rm $(RMATH_JULIA_OBJ_TARGET)
+distclean-Rmath-julia: clean-Rmath-julia
+	-rm -rf Rmath-julia-$(RMATH_JULIA_VER).tar.gz Rmath-julia-$(RMATH_JULIA_VER)
 
-get-Rmath: Rmath/Make.inc
-configure-Rmath: get-Rmath
-compile-Rmath: $(RMATH_OBJ_SOURCE)
-check-Rmath: compile-Rmath
-install-Rmath: $(RMATH_OBJ_TARGET)
+get-Rmath-julia: Rmath-julia-$(RMATH_JULIA_VER).tar.gz
+configure-Rmath-julia: get-Rmath-julia
+compile-Rmath-julia: $(RMATH_JULIA_OBJ_SOURCE)
+check-Rmath-julia: compile-Rmath-julia
+install-Rmath-julia: $(RMATH_JULIA_OBJ_TARGET)
 
 
 ## objconv ##
@@ -1590,6 +1598,7 @@ $(GMP_OBJ_TARGET): $(GMP_SRC_TARGET) gmp-$(GMP_VER)/checked | $(build_shlibdir) 
 	$(INSTALL_M) gmp-$(GMP_VER)/.libs/libgmp.*$(SHLIB_EXT)* $(build_shlibdir)
 	$(INSTALL_F) gmp-$(GMP_VER)/gmp.h $(build_includedir)
 	$(INSTALL_NAME_CMD)libgmp.$(SHLIB_EXT) $@
+	touch -c $@
 
 clean-gmp:
 	-$(MAKE) -C gmp-$(GMP_VER) clean
@@ -1621,7 +1630,7 @@ mpfr-$(MPFR_VER)/configure: mpfr-$(MPFR_VER).tar.bz2
 	$(JLCHECKSUM) $<
 	$(TAR) jxf $<
 	touch -c $@
-mpfr-$(MPFR_VER)/config.status: mpfr-$(MPFR_VER)/configure $(MPFR_DEPS)
+mpfr-$(MPFR_VER)/config.status: mpfr-$(MPFR_VER)/configure | $(MPFR_DEPS)
 	cd mpfr-$(MPFR_VER) && \
 	./configure $(CONFIGURE_COMMON) $(MPFR_OPTS) F77= --enable-shared --disable-static
 	touch -c $@
@@ -1699,7 +1708,7 @@ GIT_SOURCE = git-$(GIT_VER)/src/git
 GIT_TARGET = $(build_prefix)/git
 
 git-$(GIT_VER).tar.gz:
-	$(JLDOWNLOAD) $@ http://git-core.googlecode.com/files/$@
+	$(JLDOWNLOAD) $@ https://www.kernel.org/pub/software/scm/git/git-$(GIT_VER).tar.gz
 git-$(GIT_VER)/configure: git-$(GIT_VER).tar.gz
 	$(JLCHECKSUM) $<
 	$(TAR) zxf $<
@@ -1776,11 +1785,7 @@ libgit2-$(LIBGIT2_VER).tar.gz:
 	$(JLDOWNLOAD) $@ https://github.com/libgit2/libgit2/archive/v$(LIBGIT2_VER).tar.gz
 libgit2-$(LIBGIT2_VER)/CMakeLists.txt: libgit2-$(LIBGIT2_VER).tar.gz
 	$(JLCHECKSUM) $<
-ifeq ($(BUILD_OS),WINNT)
-	$(TAR) --exclude=libgit2-$(LIBGIT2_VER)/tests/resources/template/hooks/link.sample -zxf $<
-else
 	$(TAR) zxf $<
-endif
 	touch -c $@
 libgit2-$(LIBGIT2_VER)/build/Makefile: libgit2-$(LIBGIT2_VER)/CMakeLists.txt
 	mkdir -p libgit2-$(LIBGIT2_VER)/build
@@ -1797,6 +1802,15 @@ endif
 	echo 1 > $@
 $(LIBGIT2_OBJ_TARGET): $(LIBGIT2_OBJ_SOURCE) | $(build_shlibdir)
 	cp $< $@
+ifeq ($(OS),Linux)
+	# If we're on linux, copy over libssl and libcrypto for libgit2
+	-LIBGIT_LIBS=$$(ldd "$@" | tail -n +2 | awk '{print $$(NF-1)}'); \
+	for LIB in libssl libcrypto; do \
+		LIB_PATH=$$(echo "$$LIBGIT_LIBS" | grep "$$LIB"); \
+		echo "LIB_PATH for $$LIB: $$LIB_PATH"; \
+		[ ! -z "$$LIB_PATH" ] && cp -v "$$LIB_PATH" $(build_shlibdir); \
+	done
+endif
 
 clean-libgit2:
 	-rm -rf libgit2-$(LIBGIT2_VER)/build/
@@ -1805,7 +1819,7 @@ distclean-libgit2:
 	-rm -rf libgit2-$(LIBGIT2_VER).tar.gz libgit2-$(LIBGIT2_VER).zip libgit2-$(LIBGIT2_VER)
 
 get-libgit2: libgit2-$(LIBGIT2_VER).tar.gz
-configure-libgit2: libgit2-$(LIBGIT2_VER)/Makefile
+configure-libgit2: libgit2-$(LIBGIT2_VER)/build/Makefile
 compile-libgit2: $(LIBGIT2_OBJ_SOURCE)
 check-libgit2: libgit2-$(LIBGIT2_VER)/build/checked
 install-libgit2: $(LIBGIT2_OBJ_TARGET)
@@ -1814,4 +1828,4 @@ install-libgit2: $(LIBGIT2_OBJ_TARGET)
 
 .PHONY: default compile install cleanall distcleanall \
 	get-* configure-* compile-* check-* install-* \
-	clean-* distclean-* reinstall-*
+	clean-* distclean-* reinstall-* update-llvm

@@ -5,7 +5,7 @@ export completions, shell_completions, latex_completions
 using Base.Meta
 
 function completes_global(x, name)
-    return beginswith(x, name) && !('#' in x)
+    return startswith(x, name) && !('#' in x)
 end
 
 function filtered_mod_names(ffunc::Function, mod::Module, name::AbstractString, all::Bool=false, imported::Bool=false)
@@ -82,7 +82,7 @@ function complete_symbol(sym, ffunc)
         fields = t.names
         for field in fields
             s = string(field)
-            if beginswith(s, name)
+            if startswith(s, name)
                 push!(suggestions, s)
             end
         end
@@ -100,7 +100,7 @@ function complete_keyword(s::ByteString)
     r = searchsorted(sorted_keywords, s)
     i = first(r)
     n = length(sorted_keywords)
-    while i <= n && beginswith(sorted_keywords[i],s)
+    while i <= n && startswith(sorted_keywords[i],s)
         r = first(r):i
         i += 1
     end
@@ -124,7 +124,7 @@ function complete_path(path::AbstractString, pos)
 
     matches = UTF8String[]
     for file in files
-        if beginswith(file, prefix)
+        if startswith(file, prefix)
             id = try isdir(joinpath(dir, file)) catch; false end
             # joinpath is not used because windows needs to complete with double-backslash
             push!(matches, id ? file * (@windows? "\\\\" : "/") : file)
@@ -134,16 +134,98 @@ function complete_path(path::AbstractString, pos)
     return matches, nextind(path, pos - sizeof(prefix) - length(matchall(r" ", prefix))):pos, length(matches) > 0
 end
 
-function complete_methods(input::AbstractString)
-    tokens = split(input, '.')
-    fn = Main
-    for token in tokens
-        sym = symbol(token)
-        isdefined(fn, sym) || return UTF8String[]
-        fn = fn.(sym)
+# Determines whether method_complete should be tried. It should only be done if
+# the string endswiths ',' or '(' when disregarding whitespace_chars
+function should_method_complete(s::AbstractString)
+    for c in reverse(s)
+        if c in [',', '(']
+            return true
+        elseif !(c in whitespace_chars)
+            return false
+        end
     end
-    isgeneric(fn) || return UTF8String[]
-    UTF8String[string(m) for m in methods(fn)]
+    false
+end
+
+# Returns a range that includes the method name in front of the first non
+# closed start brace from the end of the string.
+function find_start_brace(s::AbstractString)
+    braces = 0
+    r = RevString(s)
+    i = start(r)
+    in_single_quotes = false
+    in_double_quotes = false
+    in_back_ticks = false
+    while !done(r, i)
+        c, i = next(r, i)
+        if !in_single_quotes && !in_double_quotes && !in_back_ticks
+            if c == '('
+                braces += 1
+            elseif c == ')'
+                braces -= 1
+            elseif c == '\''
+                in_single_quotes = true
+            elseif c == '"'
+                in_double_quotes = true
+            elseif c == '`'
+                in_back_ticks = true
+            end
+        else
+            if !in_back_ticks && !in_double_quotes && c == '\''
+                in_single_quotes = !in_single_quotes
+            elseif !in_back_ticks && !in_single_quotes && c == '"'
+                in_double_quotes = !in_double_quotes
+            elseif !in_single_quotes && !in_double_quotes && c == '`'
+                in_back_ticks = !in_back_ticks
+            end
+        end
+        braces == 1 && break
+    end
+    braces != 1 && return 0:-1, -1
+    method_name_end = reverseind(r, i)
+    startind = nextind(s, rsearch(s, non_identifier_chars, method_name_end))
+    return startind:endof(s), method_name_end
+end
+
+# Returns the value in a expression if sym is defined in current namespace fn.
+# This method is used to iterate to the value of a expression like:
+# :(Base.REPLCompletions.whitespace_chars) a `dump` of this expression
+# will show it consist of Expr, QuoteNode's and Symbol's which all needs to
+# be handled differently to iterate down to get the value of whitespace_chars.
+function get_value(sym::Expr, fn)
+    sym.head != :. && return (nothing, false)
+    for ex in sym.args
+        fn, found = get_value(ex, fn)
+        !found && return (nothing, false)
+    end
+    fn, true
+end
+get_value(sym::Symbol, fn) = isdefined(fn, sym) ? (fn.(sym), true) : (nothing, false)
+get_value(sym::QuoteNode, fn) = isdefined(fn, sym.value) ? (fn.(sym.value), true) : (nothing, false)
+get_value(sym, fn) = sym, true
+
+# Takes the argument of a function call and determine the type of signature of the method.
+# If the function gets called with a val::DataType then it returns Type{val} else typeof(val)
+method_type_of_arg(val::DataType) = Type{val}
+method_type_of_arg(val) = typeof(val)
+
+# Method completion on function call expression that look like :(max(1))
+function complete_methods(ex_org::Expr)
+    args_ex = DataType[]
+    func, found = get_value(ex_org.args[1], Main)
+    (!found || (found && !isgeneric(func))) && return UTF8String[]
+    for ex in ex_org.args[2:end]
+        val, found = get_value(ex, Main)
+        found ? push!(args_ex, method_type_of_arg(val)) : push!(args_ex, Any)
+    end
+    out = UTF8String[]
+    t_in = tuple(args_ex...) # Input types
+    for method in methods(func)
+        # Check if the method's type signature intersects the input types
+        typeintersect(method.sig[1 : min(length(args_ex), end)], t_in) != None &&
+            push!(out,string(method))
+    end
+    return out
 end
 
 include("latex_symbols.jl")
@@ -175,7 +257,7 @@ function latex_completions(string, pos)
         else
             # return possible matches; these cannot be mixed with regular
             # Julian completions as only latex symbols contain the leading \
-            latex_names = filter(k -> beginswith(k, s), keys(latex_symbols))
+            latex_names = filter(k -> startswith(k, s), keys(latex_symbols))
             return (true, (sort!(collect(latex_names)), slashpos:pos, true))
         end
     end
@@ -206,10 +288,12 @@ function completions(string, pos)
     # Make sure that only latex_completions is working on strings
     inc_tag==:string && return UTF8String[], 0:-1, false
 
-    if inc_tag == :other && string[pos] == '('
-        endpos = prevind(string, pos)
-        startpos = nextind(string, rsearch(string, non_identifier_chars, endpos))
-        return complete_methods(string[startpos:endpos]), startpos:endpos, false
+     if inc_tag == :other && should_method_complete(partial)
+        frange, method_name_end = find_start_brace(partial)
+        ex = parse(partial[frange] * ")", raise=false)
+        if isa(ex, Expr) && ex.head==:call
+            return complete_methods(ex), start(frange):method_name_end, false
+        end
     elseif inc_tag == :comment
         return UTF8String[], 0:-1, false
     end
@@ -228,12 +312,19 @@ function completions(string, pos)
         # also search for packages
         s = string[startpos:pos]
         if dotpos <= startpos
-            append!(suggestions, filter(isdir(Pkg.dir()) ? readdir(Pkg.dir()) : Union(ASCIIString,UTF8String)[]) do pname
-                pname[1] != '.' &&
-                pname != "METADATA" &&
-                pname != "REQUIRE" &&
-                beginswith(pname, s)
-            end)
+            for dir in [Pkg.dir(); LOAD_PATH; pwd()]
+                isdir(dir) || continue
+                for pname in readdir(dir)
+                    if pname[1] != '.' && pname != "METADATA" &&
+                          pname != "REQUIRE" && startswith(pname, s)
+                        if isfile(joinpath(dir, pname))
+                            endswith(pname, ".jl") && push!(suggestions, pname[1:end-3])
+                        else
+                            push!(suggestions, pname)
+                        end
+                    end
+                end
+            end
         end
         ffunc = (mod,x)->(isdefined(mod, x) && isa(mod.(x), Module))
         comp_keywords = false

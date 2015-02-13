@@ -1,10 +1,12 @@
 # Various Unicode functionality from the utf8proc library
 module UTF8proc
 
-import Base: show, showcompact, ==, string, symbol, isless
+import Base: show, showcompact, ==, hash, string, symbol, isless, length, eltype, start, next, done, convert
+
+export isgraphemebreak
 
 # also exported by Base:
-export normalize_string, is_valid_char, is_assigned_char,
+export normalize_string, graphemes, is_valid_char, is_assigned_char,
    islower, isupper, isalpha, isdigit, isnumber, isalnum,
    iscntrl, ispunct, isspace, isprint, isgraph, isblank
 
@@ -13,6 +15,7 @@ is_valid_char(c) = (0x0 <= c <= 0x110000) && bool(ccall(:utf8proc_codepoint_vali
 is_valid_char(c::Char) = is_valid_char(uint32(c))
 
 # utf8 category constants
+const UTF8PROC_CATEGORY_CN = 0
 const UTF8PROC_CATEGORY_LU = 1
 const UTF8PROC_CATEGORY_LL = 2
 const UTF8PROC_CATEGORY_LT = 3
@@ -42,7 +45,6 @@ const UTF8PROC_CATEGORY_CC = 26
 const UTF8PROC_CATEGORY_CF = 27
 const UTF8PROC_CATEGORY_CS = 28
 const UTF8PROC_CATEGORY_CO = 29
-const UTF8PROC_CATEGORY_CN = 30
 
 const UTF8PROC_NULLTERM  = (1<<0)
 const UTF8PROC_STABLE    = (1<<1)
@@ -59,6 +61,8 @@ const UTF8PROC_CASEFOLD  = (1<<10)
 const UTF8PROC_CHARBOUND = (1<<11)
 const UTF8PROC_LUMP      = (1<<12)
 const UTF8PROC_STRIPMARK = (1<<13)
+
+############################################################################
 
 let
     const p = Array(Ptr{UInt8}, 1)
@@ -110,42 +114,32 @@ function normalize_string(s::AbstractString, nf::Symbol)
                     throw(ArgumentError(":$nf is not one of :NFC, :NFD, :NFKC, :NFKD")))
 end
 
+############################################################################
+
 # returns UTF8PROC_CATEGORY code in 1:30 giving Unicode category
 function category_code(c)
     uint32(c) > 0x10FFFF && return 0x0000 # see utf8proc_get_property docs
-    cat = unsafe_load(ccall(:utf8proc_get_property, Ptr{UInt16}, (Int32,), c))
-    # note: utf8proc returns 0, not UTF8PROC_CATEGORY_CN, for unassigned c
-    cat == 0 ? UTF8PROC_CATEGORY_CN : cat
+    return unsafe_load(ccall(:utf8proc_get_property, Ptr{UInt16}, (Int32,), c))
 end
 
 is_assigned_char(c) = category_code(c) != UTF8PROC_CATEGORY_CN
 
-# category_code() modified to ignore case of unassigned category CN
-#  used by character class predicates for improved performance
-function _catcode(c::Char)
-    c > char(0x10FFFF) && return uint16(0x0000) # see utf8proc_get_property docs
-    return unsafe_load(ccall(:utf8proc_get_property, Ptr{UInt16}, (Int32,), c))
-end
-
-# TODO: use UTF8PROC_CHARBOUND to extract graphemes from a string, e.g. to iterate over graphemes?
-
-
 ## libc character class predicates ##
 
-islower(c::Char) = (_catcode(c) == UTF8PROC_CATEGORY_LL)
+islower(c::Char) = (category_code(c) == UTF8PROC_CATEGORY_LL)
 
 # true for Unicode upper and mixed case
 function isupper(c::Char)
-    ccode = _catcode(c)
+    ccode = category_code(c)
     return ccode == UTF8PROC_CATEGORY_LU || ccode == UTF8PROC_CATEGORY_LT
 end
 
 isdigit(c::Char)  = ('0' <= c <= '9')
-isalpha(c::Char)  = (UTF8PROC_CATEGORY_LU <= _catcode(c) <= UTF8PROC_CATEGORY_LO)
-isnumber(c::Char) = (UTF8PROC_CATEGORY_ND <= _catcode(c) <= UTF8PROC_CATEGORY_NO)
+isalpha(c::Char)  = (UTF8PROC_CATEGORY_LU <= category_code(c) <= UTF8PROC_CATEGORY_LO)
+isnumber(c::Char) = (UTF8PROC_CATEGORY_ND <= category_code(c) <= UTF8PROC_CATEGORY_NO)
 
 function isalnum(c::Char)
-    ccode = _catcode(c)
+    ccode = category_code(c)
     return (UTF8PROC_CATEGORY_LU <= ccode <= UTF8PROC_CATEGORY_LO) ||
            (UTF8PROC_CATEGORY_ND <= ccode <= UTF8PROC_CATEGORY_NO)
 end
@@ -153,19 +147,19 @@ end
 # following C++ only control characters from the Latin-1 subset return true
 iscntrl(c::Char) = (c <= char(0x1f) || char(0x7f) <= c <= char(0x9f))
 
-ispunct(c::Char) = (UTF8PROC_CATEGORY_PC <= _catcode(c) <= UTF8PROC_CATEGORY_PO)
+ispunct(c::Char) = (UTF8PROC_CATEGORY_PC <= category_code(c) <= UTF8PROC_CATEGORY_PO)
 
 # 0x85 is the Unicode Next Line (NEL) character
-isspace(c::Char) = c == ' ' || '\t' <= c <='\r' || c == char(0x85) || _catcode(c)==UTF8PROC_CATEGORY_ZS
+isspace(c::Char) = c == ' ' || '\t' <= c <='\r' || c == char(0x85) || category_code(c)==UTF8PROC_CATEGORY_ZS
 
-isprint(c::Char) = (UTF8PROC_CATEGORY_LU <= _catcode(c) <= UTF8PROC_CATEGORY_ZS)
+isprint(c::Char) = (UTF8PROC_CATEGORY_LU <= category_code(c) <= UTF8PROC_CATEGORY_ZS)
 
 # true in principal if a printer would use ink
-isgraph(c::Char) = (UTF8PROC_CATEGORY_LU <= _catcode(c) <= UTF8PROC_CATEGORY_SO)
+isgraph(c::Char) = (UTF8PROC_CATEGORY_LU <= category_code(c) <= UTF8PROC_CATEGORY_SO)
 
 for name = ("alnum", "alpha", "cntrl", "digit", "number", "graph",
             "lower", "print", "punct", "space", "upper")
-    f = symbol(string("is",name))
+    f = symbol("is",name)
     @eval begin
         function $f(s::AbstractString)
             for c in s
@@ -177,5 +171,55 @@ for name = ("alnum", "alpha", "cntrl", "digit", "number", "graph",
         end
     end
 end
+
+############################################################################
+# iterators for grapheme segmentation
+
+isgraphemebreak(c1::Char, c2::Char) =
+    ccall(:utf8proc_grapheme_break, Bool, (Char, Char), c1, c2)
+
+immutable GraphemeIterator{S<:AbstractString}
+    s::S # original string (for generation of SubStrings)
+end
+graphemes(s::AbstractString) = GraphemeIterator{typeof(s)}(s)
+
+eltype{S}(::GraphemeIterator{S}) = SubString{S}
+
+function length(g::GraphemeIterator)
+    c0 = Char(0x00ad) # soft hyphen (grapheme break always allowed after this)
+    n = 0
+    for c in g.s
+        n += isgraphemebreak(c0, c)
+        c0 = c
+    end
+    return n
+end
+
+start(g::GraphemeIterator) = start(g.s)
+done(g::GraphemeIterator, i) = done(g.s, i)
+
+function next(g::GraphemeIterator, i)
+    s = g.s
+    j = i
+    c0, k = next(s, i)
+    while !done(s, k) # loop until next grapheme is s[i:j]
+        c, ℓ = next(s, k)
+        isgraphemebreak(c0, c) && break
+        j = k
+        k = ℓ
+        c0 = c
+    end
+    return (s[i:j], k)
+end
+
+==(g1::GraphemeIterator, g2::GraphemeIterator) = g1.s == g2.s
+hash(g::GraphemeIterator, h::UInt) = hash(g.s, h)
+isless(g1::GraphemeIterator, g2::GraphemeIterator) = isless(g1.s, g2.s)
+
+convert{S<:AbstractString}(::Type{S}, g::GraphemeIterator) = convert(S, g.s)
+
+show{S}(io::IO, g::GraphemeIterator{S}) = print(io, "length-$(length(g)) GraphemeIterator{$S} for \"$(g.s)\"")
+
+############################################################################
 
 end # module

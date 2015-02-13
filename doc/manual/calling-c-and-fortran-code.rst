@@ -1,7 +1,7 @@
 .. _man-calling-c-and-fortran-code:
 
 ****************************
- Calling C and Fortran Code  
+ Calling C and Fortran Code
 ****************************
 
 Though most code can be written in Julia, there are many high-quality,
@@ -26,7 +26,7 @@ possible to perform whole-program optimizations that can even optimize
 across this boundary, but Julia does not yet support that. In the
 future, however, it may do so, yielding even greater performance gains.)
 
-Shared libraries and functions are referenced by a tuple of the 
+Shared libraries and functions are referenced by a tuple of the
 form ``(:function, "library")`` or ``("function", "library")`` where ``function``
 is the C-exported function name. ``library`` refers to the shared library
 name: shared libraries available in the (platform-specific) load path
@@ -163,21 +163,34 @@ example computes a dot product using a BLAS function.
     end
 
 The meaning of prefix ``&`` is not quite the same as in C. In
-particular, any changes to the referenced variables will not be visible
-in Julia. However, it will
-never cause any harm for called functions to attempt such modifications
-(that is, writing through the passed pointers). Since this ``&`` is not
-a real address operator, it may be used with any syntax, such as
-``&0`` or ``&f(x)``.
+particular, any changes to the referenced variables will not be
+visible in Julia unless the type is mutable (declared via
+``type``). However, even for immutable types it will not cause any
+harm for called functions to attempt such modifications (that is,
+writing through the passed pointers). Moreover, ``&`` may be used with
+any expression, such as ``&0`` or ``&f(x)``.
 
-Note that no C header files are used anywhere in the process. Currently,
-it is not possible to pass structs and other non-primitive types from
-Julia to C libraries. However, C functions that generate and use opaque
-struct types by passing pointers to them can return such values
-to Julia as ``Ptr{Void}``, which can then be passed to other C functions
-as ``Ptr{Void}``. Memory allocation and deallocation of such objects
-must be handled by calls to the appropriate cleanup routines in the
-libraries being used, just like in any C program.
+Currently, it is not possible to reliably pass structs and other non-primitive
+types by *value* from Julia to/from C libraries. However, *pointers*
+to structs can be passed.  The simplest case is that of C functions
+that generate and use *opaque* pointers to struct types, which can be
+passed to/from Julia as ``Ptr{Void}`` (or any other ``Ptr``
+type). Memory allocation and deallocation of such objects must be
+handled by calls to the appropriate cleanup routines in the libraries
+being used, just like in any C program.  A more complicated approach
+is to declare a composite type in Julia that mirrors a C struct, which
+allows the structure fields to be directly accessed in Julia.  Given a
+Julia variable ``x`` of that type, a pointer can be passed as ``&x``
+to a C function expecting a pointer to the corresponding struct.  If
+the Julia type ``T`` is ``immutable``, then a Julia ``Array{T}`` is
+stored in memory identically to a C array of the corresponding struct,
+and can be passed to a C program expecting such an array pointer.
+
+Note that no C header files are used anywhere in the process: you are
+responsible for making sure that your Julia types and call signatures
+accurately reflect those in the C header file.  (The `Clang package
+<https://github.com/ihnorton/Clang.jl>` can be used to generate Julia
+code from a C header file.)
 
 Mapping C Types to Julia
 ------------------------
@@ -264,10 +277,6 @@ Julia type with the same name, prefixed by C. This can help for writing portable
 | appropriately defined bits type)           | &variable_name in the          |
 |                                            | parameter list)                |
 +------------------------+-------------------+--------------------------------+
-| ``struct T`` (where T represents  an       | ``T`` (call using              |
-| appropriately defined bits type)           | &variable_name in the          |
-|                                            | parameter list)                |
-+------------------------+-------------------+--------------------------------+
 | ``jl_value_t*`` (any Julia Type)           | ``Ptr{Any}``                   |
 +------------------------+-------------------+--------------------------------+
 
@@ -295,7 +304,7 @@ A C function declared to return ``void`` will give ``nothing`` in Julia.
 
 For string arguments (``char*``) the Julia type should be ``Ptr{UInt8}``,
 not ``ASCIIString``. C functions that take an argument of the type ``char**``
-can be called by using a ``Ptr{Ptr{UInt8}}`` type within Julia. For example, 
+can be called by using a ``Ptr{Ptr{UInt8}}`` type within Julia. For example,
 C functions of the form::
 
     int main(int argc, char **argv);
@@ -385,7 +394,7 @@ the ccall. ccall automatically arranges that all of its arguments will be
 preserved from garbage collection until the call returns. If a C API will
 store a reference to memory allocated by Julia, after the ccall returns, you
 must arrange that the object remains visible to the garbage collector. The
-suggested way to handle this is to make a global variable of type 
+suggested way to handle this is to make a global variable of type
 ``Array{Any,1}`` to hold these values, until C interface notifies you that
 it is finished with them.
 
@@ -396,10 +405,10 @@ of the buffer, so that it is safe to free (or alter) the original data without
 affecting Julia. A notable exception is ``pointer_to_array()`` which, for performance
 reasons, shares (or can be told to take ownership of) the underlying buffer.
 
-The garbage collector does not guarantee any order of finalization. That is, if ``a`` 
-contained a reference to ``b`` and both ``a`` and ``b`` are due for garbage 
+The garbage collector does not guarantee any order of finalization. That is, if ``a``
+contained a reference to ``b`` and both ``a`` and ``b`` are due for garbage
 collection, there is no guarantee that ``b`` would be finalized after ``a``. If
-proper finalization of ``a`` depends on ``b`` being valid, it must be handled in 
+proper finalization of ``a`` depends on ``b`` being valid, it must be handled in
 other ways.
 
 
@@ -434,7 +443,7 @@ Calling Convention
 
 The second argument to ``ccall`` can optionally be a calling convention
 specifier (immediately preceding return type). Without any specifier,
-the platform-default C calling convention is used. Other supported 
+the platform-default C calling convention is used. Other supported
 conventions are: ``stdcall``, ``cdecl``, ``fastcall``, and ``thiscall``.
 For example (from base/libc.jl)::
 
@@ -534,7 +543,7 @@ For more details on how to pass callbacks to C libraries, see this
 C++
 ---
 
-Limited support for C++ is provided by the `Cpp <https://github.com/timholy/Cpp.jl>`_ 
+Limited support for C++ is provided by the `Cpp <https://github.com/timholy/Cpp.jl>`_
 and `Clang <https://github.com/ihnorton/Clang.jl>`_ packages.
 
 Handling Platform Variations
@@ -543,7 +552,7 @@ Handling Platform Variations
 When dealing with platform libraries, it is often necessary to provide special cases
 for various platforms. The variable ``OS_NAME`` can be used to write these special
 cases. Additionally, there are several macros intended to make this easier:
-``@windows``, ``@unix``, ``@linux``, and ``@osx``. Note that linux and osx are mutually 
+``@windows``, ``@unix``, ``@linux``, and ``@osx``. Note that linux and osx are mutually
 exclusive subsets of unix. Their usage takes the form of a ternary conditional
 operator, as demonstrated in the following examples.
 

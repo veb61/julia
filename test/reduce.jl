@@ -6,6 +6,15 @@
 @test Base.mapfoldl(abs2, -, 2:5) == -46
 @test Base.mapfoldl(abs2, -, 10, 2:5) == -44
 
+@test_approx_eq Base.mapfoldl(abs2, /, 2:5 ) 1/900
+@test_approx_eq Base.mapfoldl(abs2, /, 10, 2:5 ) 1/1440
+
+@test Base.mapfoldl((x)-> x $ true, &, true, [true false true false false]) == false
+@test Base.mapfoldl((x)-> x $ true, &, [true false true false false]) == false
+
+@test Base.mapfoldl((x)-> x $ true, |, [true false true false false]) == true
+@test Base.mapfoldl((x)-> x $ true, |, false, [true false true false false]) == true
+
 @test foldr(-, 1:5) == 3
 @test foldr(-, 10, 1:5) == -7
 
@@ -13,9 +22,9 @@
 @test Base.mapfoldr(abs2, -, 10, 2:5) == -4
 
 # reduce & mapreduce
-@test reduce((x,y)->"($x+$y)", [9:11]) == "((9+10)+11)"
+@test reduce((x,y)->"($x+$y)", 9:11) == "((9+10)+11)"
 @test reduce(max, [8 6 7 5 3 0 9]) == 9
-@test reduce(+, 1000, [1:5]) == (1000 + 1 + 2 + 3 + 4 + 5)
+@test reduce(+, 1000, 1:5) == (1000 + 1 + 2 + 3 + 4 + 5)
 
 @test mapreduce(-, +, [-10 -9 -3]) == ((10 + 9) + 3)
 @test mapreduce((x)->x[1:3], (x,y)->"($x+$y)", ["abcd", "efgh", "01234"]) == "((abc+efg)+012)"
@@ -39,7 +48,7 @@ fz = float(z)
 @test sum(z) === 136
 @test sum(fz) === 136.0
 
-@test_throws ErrorException sum(sin, Int[])
+@test_throws ArgumentError sum(sin, Int[])
 @test sum(sin, 3) == sin(3.0)
 @test sum(sin, [3]) == sin(3.0)
 a = sum(sin, z)
@@ -83,7 +92,7 @@ for f in (sum2, sum5, sum6, sum9, sum10)
 end
 for f in (sum3, sum4, sum7, sum8)
     @test sum(z) == f(z)
-    @test_throws ErrorException f(Int[])
+    @test_throws ArgumentError f(Int[])
     @test sum(Int[7]) == f(Int[7]) == 7
 end
 @test typeof(sum(Int8[])) == typeof(sum(Int8[1])) == typeof(sum(Int8[1 7]))
@@ -116,8 +125,8 @@ prod2(itr) = invoke(prod, (Any,), itr)
 
 # maximum & minimum & extrema
 
-@test_throws ErrorException maximum(Int[])
-@test_throws ErrorException minimum(Int[])
+@test_throws ArgumentError maximum(Int[])
+@test_throws ArgumentError minimum(Int[])
 
 @test maximum(5) == 5
 @test minimum(5) == 5
@@ -140,7 +149,7 @@ prod2(itr) = invoke(prod, (Any,), itr)
 @test extrema([4., 3., NaN, 5., 2.]) == (2., 5.)
 
 @test maxabs(Int[]) == 0
-@test_throws ErrorException Base.minabs(Int[])
+@test_throws ArgumentError Base.minabs(Int[])
 
 @test maxabs(-2) == 2
 @test minabs(-2) == 2
@@ -149,6 +158,10 @@ prod2(itr) = invoke(prod, (Any,), itr)
 
 @test maximum(x->abs2(x), 3:7) == 49
 @test minimum(x->abs2(x), 3:7) == 9
+
+@test maximum(Int16[1]) === Int16(1)
+@test maximum(collect(Int16(1):Int16(100))) === Int16(100)
+@test maximum(Int32[1,2]) === Int32(2)
 
 # any & all
 
@@ -190,6 +203,11 @@ prod2(itr) = invoke(prod, (Any,), itr)
 @test in(0, 1:3) == false
 @test in(1, 1:3) == true
 @test in(2, 1:3) == true
+
+# contains
+
+@test contains("quick fox", "fox") == true
+@test contains("quick fox", "lazy dog") == false
 
 # count & countnz
 

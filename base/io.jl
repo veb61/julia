@@ -6,7 +6,7 @@
 
 ## byte-order mark, ntoh & hton ##
 
-const ENDIAN_BOM = reinterpret(UInt32,uint8([1:4]))[1]
+const ENDIAN_BOM = reinterpret(UInt32,uint8([1:4;]))[1]
 
 if ENDIAN_BOM == 0x01020304
     ntoh(x) = x
@@ -268,7 +268,7 @@ function done(itr::EachLine, nada)
     true
 end
 next(itr::EachLine, nada) = (readline(itr.stream), nothing)
-eltype(itr::EachLine) = ByteString
+eltype(::Type{EachLine}) = ByteString
 
 readlines(s=STDIN) = collect(eachline(s))
 
@@ -288,8 +288,8 @@ function unmark(io::IO)
     return true
 end
 
-function reset(io::IO)
-    !ismarked(io) && error(io, " not marked")
+function reset{T<:IO}(io::T)
+    ismarked(io) || throw(ArgumentError("$(T) not marked"))
     m = io.mark
     seek(io, m)
     io.mark = -1 # must be after seek, or seek may fail

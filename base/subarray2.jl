@@ -23,7 +23,11 @@ for i = 1:4
     @eval begin
         stagedfunction getindex{T,N,P,IV,LD}(V::SubArray{T,N,P,IV,LD}, $(varsInt...))
             if $i == 1 && length(IV) == LD  # linear indexing
-                return :(V.parent[V.first_index + V.stride1*(i_1-1)])
+                meta = Expr(:meta, :inline)
+                if iscontiguous(V)
+                    return :($meta; V.parent[V.first_index + i_1 - 1])
+                end
+                return :($meta; V.parent[V.first_index + V.stride1*(i_1-1)])
             end
             exhead, ex = index_generate(ndims(P), IV, :V, [$(vars...)])
             quote
@@ -33,7 +37,11 @@ for i = 1:4
         end
         stagedfunction setindex!{T,N,P,IV,LD}(V::SubArray{T,N,P,IV,LD}, v, $(varsInt...))
             if $i == 1 && length(IV) == LD  # linear indexing
-                return :(V.parent[V.first_index + V.stride1*(i_1-1)] = v)
+                meta = Expr(:meta, :inline)
+                if iscontiguous(V)
+                    return :($meta; V.parent[V.first_index + i_1 - 1] = v)
+                end
+                return :($meta; V.parent[V.first_index + V.stride1*(i_1-1)] = v)
             end
             exhead, ex = index_generate(ndims(P), IV, :V, [$(vars...)])
             quote
@@ -154,11 +162,15 @@ function index_generate(NP, Itypes, Vsym, Isyms)
     for k = j+1:length(Isyms)
         push!(indexexprs, Isyms[k])
     end
+    if exhead == :nothing
+        exhead = Expr(:meta, :inline)
+    end
     exhead, :($Vsym.parent[$(indexexprs...)])
 end
 
 unsafe_getindex(v::Real, ind::Int) = v
 unsafe_getindex(v::Range, ind::Int) = first(v) + (ind-1)*step(v)
+@inline unsafe_getindex(v::Array, ind::Int) = (@inbounds x = v[ind]; x)
 unsafe_getindex(v::AbstractArray, ind::Int) = v[ind]
 unsafe_getindex(v::Colon, ind::Int) = ind
 unsafe_getindex(v, ind::Real) = unsafe_getindex(v, to_index(ind))

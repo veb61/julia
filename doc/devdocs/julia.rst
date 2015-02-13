@@ -12,3 +12,5 @@
    cartesian
    meta
    subarrays
+   sysimg
+   llvm

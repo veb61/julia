@@ -5,14 +5,31 @@ type IntSet
 
     IntSet() = new(zeros(UInt32,256>>>5), 256, false)
 end
-
 IntSet(itr) = (s=IntSet(); for a in itr; push!(s,a); end; s)
 
+eltype(::Type{IntSet}) = Int64
 similar(s::IntSet) = IntSet()
 
-copy(s::IntSet) = union!(IntSet(), s)
+function show(io::IO, s::IntSet)
+    print(io, "IntSet([")
+    first = true
+    for n in s
+        if n > s.limit
+            break
+        end
+        if !first
+            print(io, ", ")
+        end
+        print(io, n)
+        first = false
+    end
+    if s.fill1s
+        print(io, ", ..., ", typemax(Int)-1)
+    end
+    print(io, "])")
+end
 
-eltype(s::IntSet) = Int64
+copy(s::IntSet) = union!(IntSet(), s)
 
 function sizehint!(s::IntSet, top::Integer)
     if top >= s.limit
@@ -150,7 +167,7 @@ isempty(s::IntSet) =
 function first(s::IntSet)
     n = next(s,0)[1]
     if n >= s.limit
-        error("set must be non-empty")
+        throw(ArgumentError("set must be non-empty"))
     end
     return n
 end
@@ -166,31 +183,11 @@ function last(s::IntSet)
             end
         end
     end
-    error("set has no last element")
+    throw(ArgumentError("set has no last element"))
 end
 
 length(s::IntSet) = int(ccall(:bitvector_count, UInt64, (Ptr{UInt32}, UInt64, UInt64), s.bits, 0, s.limit)) +
     (s.fill1s ? typemax(Int) - s.limit : 0)
-
-function show(io::IO, s::IntSet)
-    print(io, "IntSet([")
-    first = true
-    for n in s
-        if n > s.limit
-            break
-        end
-        if !first
-            print(io, ", ")
-        end
-        print(io, n)
-        first = false
-    end
-    if s.fill1s
-        print(io, ", ..., ", typemax(Int)-1, ")")
-    else
-        print(io, "])")
-    end
-end
 
 
 # Math functions
@@ -283,7 +280,7 @@ function ==(s1::IntSet, s2::IntSet)
             end
         end
     else
-        for i = lim1:lim2
+        for i = lim1+1:lim2
             if s2.bits[i] != filln
                 return false
             end
