@@ -93,9 +93,7 @@
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/PrettyStackTrace.h>
 #include <llvm/Support/SourceMgr.h>
-#ifdef JL_DEBUG_BUILD
 #include <llvm/Support/CommandLine.h>
-#endif
 #include <llvm/Transforms/Utils/Cloning.h>
 
 #if defined(_OS_WINDOWS_) && !defined(NOMINMAX)
@@ -5529,6 +5527,10 @@ static void init_julia_llvm_env(Module *m)
 
 extern "C" void jl_init_codegen(void)
 {
+#if defined(_OS_WINDOWS_) && defined(_CPU_X86_64_)
+    const char *const argv[] = {"", "-disable-copyprop"}; // llvm bug 21743
+    cl::ParseCommandLineOptions(sizeof(argv)/sizeof(argv[0]), argv, "disable-copyprop\n");
+#endif
 #ifdef JL_DEBUG_BUILD
     cl::ParseEnvironmentOptions("Julia", "JULIA_LLVM_ARGS");
 #endif
@@ -5597,19 +5599,17 @@ extern "C" void jl_init_codegen(void)
 #endif
 #ifdef USE_MCJIT
     jl_mcjmm = new SectionMemoryManager();
-    SmallVector<std::string, 4> MAttrs;
-#else
-    // Temporarily disable Haswell BMI2 features due to LLVM bug.
-    const char *mattr[] = {"-bmi2", "-avx2"
-#ifdef V128_BUG
-        ,"-avx"
 #endif
-#if defined(LLVM35) && defined(_OS_WINDOWS_) && !defined(LLVM36)
-        ,"-disable-copyprop" // llvm bug 21743
+    const char *mattr[] = {
+#ifndef USE_MCJIT
+        // Temporarily disable Haswell BMI2 features due to LLVM bug.
+        "-bmi2", "-avx2",
+#endif
+#ifdef V128_BUG
+        "-avx",
 #endif
     };
-    SmallVector<std::string, 4> MAttrs(mattr, mattr+2);
-#endif
+    SmallVector<std::string, 4> MAttrs(mattr, mattr+sizeof(mattr)/sizeof(mattr[0]));
 #ifdef LLVM36
     EngineBuilder eb(std::move(std::unique_ptr<Module>(engine_module)));
 #else
