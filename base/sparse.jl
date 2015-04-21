@@ -1,11 +1,14 @@
 module SparseMatrix
 
-using Base: NonTupleType, Func, AddFun, OrFun
+using Base: Func, AddFun, OrFun
 using Base.Sort: Forward
 using Base.LinAlg: AbstractTriangular
 
 importall Base
 importall Base.LinAlg
+import Base.promote_eltype
+import Base.@get!
+import Base.Broadcast.eltype_plus, Base.Broadcast.broadcast_shape
 
 export AbstractSparseArray, AbstractSparseMatrix, AbstractSparseVector, SparseMatrixCSC,
        blkdiag, dense, droptol!, dropzeros!, etree, issparse, nnz, nonzeros, nzrange,
@@ -17,8 +20,10 @@ include("sparse/sparsematrix.jl")
 include("sparse/csparse.jl")
 
 include("sparse/linalg.jl")
-include("sparse/umfpack.jl")
-include("sparse/cholmod.jl")
-include("sparse/spqr.jl")
+if Base.USE_GPL_LIBS
+    include("sparse/umfpack.jl")
+    include("sparse/cholmod.jl")
+    include("sparse/spqr.jl")
+end
 
 end # module SparseMatrix

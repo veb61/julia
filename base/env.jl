@@ -131,14 +131,14 @@ end
 
 @windows_only begin
 start(hash::EnvHash) = (pos = ccall(:GetEnvironmentStringsW,stdcall,Ptr{UInt16},()); (pos,pos))
-function done(hash::EnvHash, block::(Ptr{UInt16},Ptr{UInt16}))
+function done(hash::EnvHash, block::Tuple{Ptr{UInt16},Ptr{UInt16}})
     if unsafe_load(block[1])==0
         ccall(:FreeEnvironmentStringsW,stdcall,Int32,(Ptr{UInt16},),block[2])
         return true
     end
     false
 end
-function next(hash::EnvHash, block::(Ptr{UInt16},Ptr{UInt16}))
+function next(hash::EnvHash, block::Tuple{Ptr{UInt16},Ptr{UInt16}})
     pos = block[1]
     blk = block[2]
     len = ccall(:wcslen, UInt, (Ptr{UInt16},), pos)+1
@@ -169,16 +169,20 @@ function show(io::IO, ::EnvHash)
 end
 
 # temporarily set and then restore an environment value
-function with_env(f::Function, key::AbstractString, val)
-    old = get(ENV,key,nothing)
-    val != nothing ? (ENV[key]=val) : _unsetenv(key)
+function withenv{T<:AbstractString}(f::Function, keyvals::Pair{T}...)
+    old = Dict{T,Any}()
+    for (key,val) in keyvals
+        old[key] = get(ENV,key,nothing)
+        val != nothing ? (ENV[key]=val) : _unsetenv(key)
+    end
     try f()
     finally
-        old != nothing ? (ENV[key]=old) : _unsetenv(key)
-    catch
-        rethrow()
+        for (key,val) in old
+            val != nothing ? (ENV[key]=val) : _unsetenv(key)
+        end
     end
 end
+withenv(f::Function) = f() # handle empty keyvals case; see #10853
 
 ## misc environment-related functionality ##
 

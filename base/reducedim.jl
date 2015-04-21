@@ -94,7 +94,7 @@ promote_union(T::UnionType) = promote_type(T.types...)
 promote_union(T) = T
 function reducedim_init{S}(f, op::AddFun, A::AbstractArray{S}, region)
     T = promote_union(S)
-    if method_exists(zero, (Type{T},))
+    if method_exists(zero, Tuple{Type{T}})
         x = f(zero(T))
         z = zero(x) + zero(x)
         Tr = typeof(z) == typeof(x) && !isbits(T) ? T : typeof(z)
@@ -107,7 +107,7 @@ end
 
 function reducedim_init{S}(f, op::MulFun, A::AbstractArray{S}, region)
     T = promote_union(S)
-    if method_exists(zero, (Type{T},))
+    if method_exists(zero, Tuple{Type{T}})
         x = f(zero(T))
         z = one(x) * one(x)
         Tr = typeof(z) == typeof(x) && !isbits(T) ? T : typeof(z)
@@ -353,7 +353,7 @@ function findmax{T}(A::AbstractArray{T}, region)
             zeros(Int, reduced_dims0(A, region)), A)
 end
 
-size_skip1{T}(dims::(), Aref::AbstractArray{T,0}) = CartesianIndex(())
+size_skip1{T}(dims::Tuple{}, Aref::AbstractArray{T,0}) = CartesianIndex(())
 size_skip1{T,N}(dims::NTuple{N,Int}, Aref::AbstractArray{T,N}) = CartesianIndex(skip1(dims...))
 @inline size_skip1{T,M,N}(dims::NTuple{M,Int}, Aref::AbstractArray{T,N}) = size_skip1(tuple(dims..., 1), Aref)
 skip1(x, t...) = t

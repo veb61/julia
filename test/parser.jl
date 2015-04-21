@@ -61,3 +61,11 @@ macro test999_str(args...); args; end
 @test_throws ParseError parse("+ : 2")
 @test_throws ParseError parse("< :2")
 @test parse("+ :2") == Expr(:call, :(+), QuoteNode(2))
+
+# issue #10900
+@test_throws ParseError parse("+=")
+@test_throws ParseError parse(".")
+@test_throws ParseError parse("...")
+
+# issue #10901
+@test parse("/([1], 1)[1]") == :(([1] / 1)[1])

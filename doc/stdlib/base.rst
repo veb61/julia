@@ -111,10 +111,18 @@ Getting Around
    If ``types`` is an abstract type, then the method that would be called by ``invoke``
    is returned.
 
+.. function:: which(symbol)
+
+   Return the module in which the binding for the variable referenced
+   by ``symbol`` was created.
+
 .. function:: @which
 
-   Evaluates the arguments to the specified function call, and returns the ``Method`` object
-   for the method that would be called for those arguments.
+   Applied to a function call, it evaluates the arguments to the
+   specified function call, and returns the ``Method`` object for the
+   method that would be called for those arguments.  Applied to a
+   variable, it returns the module in which the variable was bound. It
+   calls out to the ``which`` function.
 
 .. function:: methods(f, [types])
 
@@ -147,6 +155,11 @@ Getting Around
    package can be accessed using a statement such as ``using LastMain.Package``.
 
    This function should only be used interactively.
+
+.. data:: ans
+
+   A variable referring to the last computed value, automatically set at the
+   interactive prompt.
 
 All Objects
 -----------
@@ -394,7 +407,7 @@ Types
       julia> structinfo(T) = [zip(fieldoffsets(T),fieldnames(T),T.types)...];
 
       julia> structinfo(StatStruct)
-      12-element Array{(Int64,Symbol,DataType),1}:
+      12-element Array{Tuple{Int64,Symbol,DataType},1}:
        (0,:device,UInt64)
        (8,:inode,UInt64)
        (16,:mode,UInt64)
@@ -490,13 +503,13 @@ Generic Functions
    ``apply`` is called to implement the ``...`` argument splicing syntax,
    and is usually not called directly: ``apply(f,x) === f(x...)``
 
-.. function:: method_exists(f, tuple) -> Bool
+.. function:: method_exists(f, Tuple type) -> Bool
 
-   Determine whether the given generic function has a method matching the given tuple of argument types.
+   Determine whether the given generic function has a method matching the given ``Tuple`` of argument types.
 
    .. doctest::
 
-   	julia> method_exists(length, (Array,))
+   	julia> method_exists(length, Tuple{Array})
    	true
 
 .. function:: applicable(f, args...) -> Bool
@@ -671,12 +684,19 @@ System
 
 .. function:: setenv(command, env; dir=working_dir)
 
-   Set environment variables to use when running the given command. ``env`` is either
-   a dictionary mapping strings to strings, or an array of strings of the form
-   ``"var=val"``.
+   Set environment variables to use when running the given
+   command. ``env`` is either a dictionary mapping strings to strings,
+   an array of strings of the form ``"var=val"``, or zero or more
+   ``"var"=>val`` pair arguments.  In order to modify (rather than
+   replace) the existing environment, create ``env`` by ``copy(ENV)``
+   and then setting ``env["var"]=val`` as desired, or use ``withenv``.
 
-   The ``dir`` keyword argument can be used to specify a working directory for the
-   command.
+   The ``dir`` keyword argument can be used to specify a working
+   directory for the command.
+
+.. function:: withenv(f::Function, kv::Pair...)
+
+   Execute ``f()`` in an environment that is temporarily modified (not replaced as in ``setenv``) by zero or more ``"var"=>val`` arguments ``kv``.  ``withenv`` is generally used via the ``withenv(kv...) do ... end`` syntax.  A value of ``nothing`` can be used to temporarily unset an environment variable (if it is set).  When ``withenv`` returns, the original environment has been restored.
 
 .. function:: pipe(from, to, ...)
 
@@ -805,7 +825,7 @@ Errors
    Get the backtrace of the current exception, for use within ``catch``
    blocks.
 
-.. function:: assert(cond, [text])
+.. function:: assert(cond)
 
    Throw an ``AssertionError`` if ``cond`` is false. Also available as the macro ``@assert expr``.
 
@@ -1004,6 +1024,6 @@ Internals
 
    Evaluates the arguments to the function call, determines their types, and calls :func:`code_native` on the resulting expression
 
-.. function:: precompile(f,args::(Any...,))
+.. function:: precompile(f,args::Tuple{Vararg{Any}})
 
    Compile the given function ``f`` for the argument tuple (of types) ``args``, but do not execute it.

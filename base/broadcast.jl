@@ -13,9 +13,9 @@ export broadcast_getindex, broadcast_setindex!
 
 droparg1(a, args...) = args
 
-longer_tuple(x::(), retx::Tuple, y::(), rety::Tuple) = retx
-longer_tuple(x::(), retx::Tuple, y::Tuple, rety::Tuple) = rety
-longer_tuple(x::Tuple, retx::Tuple, y::(), rety::Tuple) = retx
+longer_tuple(x::Tuple{}, retx::Tuple, y::Tuple{}, rety::Tuple) = retx
+longer_tuple(x::Tuple{}, retx::Tuple, y::Tuple, rety::Tuple) = rety
+longer_tuple(x::Tuple, retx::Tuple, y::Tuple{}, rety::Tuple) = retx
 longer_tuple(x::Tuple, retx::Tuple, y::Tuple, rety::Tuple) =
     longer_tuple(droparg1(x...), retx, droparg1(y...), rety)
 longer_tuple(x::Tuple, y::Tuple) = longer_tuple(x, x, y, y)
@@ -239,7 +239,7 @@ broadcast!_function(f::Function) = (B, As...) -> broadcast!(f, B, As...)
 broadcast_function(f::Function) = (As...) -> broadcast(f, As...)
 
 broadcast_getindex(src::AbstractArray, I::AbstractArray...) = broadcast_getindex!(Array(eltype(src), broadcast_shape(I...)), src, I...)
-stagedfunction broadcast_getindex!(dest::AbstractArray, src::AbstractArray, I::AbstractArray...)
+@generated function broadcast_getindex!(dest::AbstractArray, src::AbstractArray, I::AbstractArray...)
     N = length(I)
     Isplat = Expr[:(I[$d]) for d = 1:N]
     quote
@@ -254,7 +254,7 @@ stagedfunction broadcast_getindex!(dest::AbstractArray, src::AbstractArray, I::A
     end
 end
 
-stagedfunction broadcast_setindex!(A::AbstractArray, x, I::AbstractArray...)
+@generated function broadcast_setindex!(A::AbstractArray, x, I::AbstractArray...)
     N = length(I)
     Isplat = Expr[:(I[$d]) for d = 1:N]
     quote

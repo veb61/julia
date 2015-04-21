@@ -446,18 +446,18 @@ static int verifying;
 static void add_lostval_parent(jl_value_t* parent)
 {
     for(int i = 0; i < lostval_parents_done.len; i++) {
-        if((jl_value_t*)lostval_parents_done.items[i] == parent)
+        if ((jl_value_t*)lostval_parents_done.items[i] == parent)
             return;
     }
     for(int i = 0; i < lostval_parents.len; i++) {
-        if((jl_value_t*)lostval_parents.items[i] == parent)
+        if ((jl_value_t*)lostval_parents.items[i] == parent)
             return;
     }
     arraylist_push(&lostval_parents, parent);
 }
 
 #define verify_val(v) do {                                              \
-        if(lostval == (jl_value_t*)(v) && (v) != 0) {                   \
+        if (lostval == (jl_value_t*)(v) && (v) != 0) {                  \
             jl_printf(JL_STDOUT,                                        \
                       "Found lostval 0x%lx at %s:%d oftype: ",          \
                       (uintptr_t)(lostval), __FILE__, __LINE__);        \
@@ -468,7 +468,7 @@ static void add_lostval_parent(jl_value_t* parent)
 
 
 #define verify_parent(ty, obj, slot, args...) do {                      \
-        if(*(jl_value_t**)(slot) == lostval && (obj) != lostval) {      \
+        if (*(jl_value_t**)(slot) == lostval && (obj) != lostval) {     \
             jl_printf(JL_STDOUT, "Found parent %s 0x%lx at %s:%d\n",    \
                       ty, (uintptr_t)(obj), __FILE__, __LINE__);        \
             jl_printf(JL_STDOUT, "\tloc 0x%lx : ", (uintptr_t)(slot));  \
@@ -1046,7 +1046,8 @@ static inline void *__pool_alloc(pool_t* p, int osize, int end_offset)
     end = (gcval_t*)&(GC_PAGE_DATA(v)[end_offset]);
     if (__likely(v != end)) {
         p->newpages = (gcval_t*)((char*)v + osize);
-    } else {
+    }
+    else {
         // like the freelist case, but only update the page metadata when it is full
         gcpage_t* pg = page_metadata(v);
         assert(pg->osize == p->osize);
@@ -1154,7 +1155,10 @@ static void sweep_pool_region(int region_i, int sweep_mask)
                     pfl[p_n] = sweep_page(p, pg, pfl[p_n], sweep_mask, osize);
                 }
             }
-        } else if (pg_i < lb) lb = pg_i;
+        }
+        else if (pg_i < lb) {
+            lb = pg_i;
+        }
     }
     regions_ub[region_i] = ub;
     regions_lb[region_i] = lb;
@@ -1206,7 +1210,7 @@ static gcval_t** sweep_page(pool_t* p, gcpage_t* pg, gcval_t **pfl, int sweep_ma
             goto free_page;
         }
     }
-    else if(pg->gc_bits == GC_CLEAN) {
+    else if (pg->gc_bits == GC_CLEAN) {
         goto free_page;
     }
 
@@ -1405,8 +1409,15 @@ void gc_queue_binding(jl_binding_t *bnd)
 }
 
 static int push_root(jl_value_t *v, int d, int);
+#ifdef JL_DEBUG_BUILD
+static void *volatile gc_findval; // for usage from gdb, for finding the gc-root for a value
+#endif
 static inline int gc_push_root(void *v, int d) // v isa jl_value_t*
 {
+#ifdef JL_DEBUG_BUILD
+    if (v == gc_findval)
+        jl_raise_debugger();
+#endif
     assert(v != NULL);
     jl_taggedvalue_t* o = jl_astaggedvalue(v);
     verify_val(o);
@@ -1565,14 +1576,14 @@ static int push_root(jl_value_t *v, int d, int bits)
     d++;
 
     // some values have special representations
-    if (vt == (jl_value_t*)jl_tuple_type) {
-        size_t l = jl_tuple_len(v);
-        MARK(v, bits = gc_setmark(v, l*sizeof(void*) + sizeof(jl_tuple_t), GC_MARKED_NOESC));
-        jl_value_t **data = ((jl_tuple_t*)v)->data;
+    if (vt == (jl_value_t*)jl_simplevector_type) {
+        size_t l = jl_svec_len(v);
+        MARK(v, bits = gc_setmark(v, l*sizeof(void*) + sizeof(jl_svec_t), GC_MARKED_NOESC));
+        jl_value_t **data = ((jl_svec_t*)v)->data;
         for(size_t i=0; i < l; i++) {
             jl_value_t *elt = data[i];
             if (elt != NULL) {
-                verify_parent2("tuple", v, &data[i], "elem(%d)", i);
+                verify_parent2("svec", v, &data[i], "elem(%d)", i);
                 refyoung |= gc_push_root(elt, d);
             }
         }
@@ -1664,11 +1675,11 @@ static int push_root(jl_value_t *v, int d, int bits)
         jl_datatype_t *dt = (jl_datatype_t*)vt;
         size_t dtsz;
         if (dt == jl_datatype_type)
-            dtsz = NWORDS(sizeof(jl_datatype_t) + jl_tuple_len(((jl_datatype_t*)v)->names)*sizeof(jl_fielddesc_t))*sizeof(void*);
+            dtsz = NWORDS(sizeof(jl_datatype_t) + jl_datatype_nfields(v)*sizeof(jl_fielddesc_t))*sizeof(void*);
         else
             dtsz = jl_datatype_size(dt);
         MARK(v, bits = gc_setmark(v, dtsz, GC_MARKED_NOESC));
-        int nf = (int)jl_tuple_len(dt->names);
+        int nf = (int)jl_datatype_nfields(dt);
         // TODO check if there is a perf improvement for objects with a lot of fields
         // int fdsz = sizeof(void*)*nf;
         // void** children = alloca(fdsz);
@@ -1711,7 +1722,7 @@ static int push_root(jl_value_t *v, int d, int bits)
 #undef MARK
 
  queue_the_root:
-    if(mark_sp >= mark_stack_size) grow_mark_stack();
+    if (mark_sp >= mark_stack_size) grow_mark_stack();
     mark_stack[mark_sp++] = (jl_value_t*)v;
     max_msp = max_msp > mark_sp ? max_msp : mark_sp;
     return bits;
@@ -1788,10 +1799,11 @@ static void pre_mark(void)
     gc_push_root(jl_unprotect_stack_func, 0);
     gc_push_root(jl_bottom_func, 0);
     gc_push_root(jl_typetype_type, 0);
-    gc_push_root(jl_tupletype_type, 0);
 
     // constants
-    gc_push_root(jl_null, 0);
+    gc_push_root(jl_emptysvec, 0);
+    gc_push_root(jl_emptytuple, 0);
+    gc_push_root(jl_typeof(jl_emptytuple), 0);
     gc_push_root(jl_true, 0);
     gc_push_root(jl_false, 0);
 }
@@ -2173,7 +2185,7 @@ void jl_gc_collect(int full)
 #if defined(GC_TIME) || defined(GC_FINAL_STATS)
     uint64_t post_time = 0, finalize_time = 0;
 #endif
-    if(mark_sp == 0 || sweeping) {
+    if (mark_sp == 0 || sweeping) {
 #if defined(GC_TIME) || defined(GC_FINAL_STATS)
         uint64_t sweep_t0 = jl_hrtime();
 #endif
@@ -2224,7 +2236,8 @@ void jl_gc_collect(int full)
                 sweep_mask = GC_MARKED;
                 promoted_bytes = 0;
                 quick_count = 0;
-            } else {
+            }
+            else {
                 collect_interval = default_collect_interval/2;
                 sweep_mask = GC_MARKED_NOESC;
             }
@@ -2341,7 +2354,8 @@ void *reallocb(void *b, size_t sz)
         void* b2 = allocb(sz);
         memcpy(b2, b, page_metadata(buff)->osize);
         return b2;
-    } else {
+    }
+    else {
         bigval_t* bv = (bigval_t*)realloc(bigval_header(buff), sz + (BVOFFS + 1)*sizeof(void*));
         return (char*)bv + (BVOFFS + 1)*sizeof(void*);
     }

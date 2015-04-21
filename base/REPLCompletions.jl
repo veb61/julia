@@ -226,10 +226,10 @@ function complete_methods(ex_org::Expr)
         found ? push!(args_ex, method_type_of_arg(val)) : push!(args_ex, Any)
     end
     out = UTF8String[]
-    t_in = tuple(args_ex...) # Input types
+    t_in = Tuple{args_ex...} # Input types
     for method in methods(func)
         # Check if the method's type signature intersects the input types
-        typeintersect(method.sig[1 : min(length(args_ex), end)], t_in) != None &&
+        typeintersect(Tuple{method.sig.parameters[1 : min(length(args_ex), end)]...}, t_in) != Union() &&
             push!(out,string(method))
     end
     return out
@@ -334,11 +334,23 @@ function completions(string, pos)
                 isdir(dir) || continue
                 for pname in readdir(dir)
                     if pname[1] != '.' && pname != "METADATA" &&
-                          pname != "REQUIRE" && startswith(pname, s)
+                        pname != "REQUIRE" && startswith(pname, s)
+                        # Valid file paths are
+                        #   <Mod>.jl
+                        #   <Mod>/src/<Mod>.jl
+                        #   <Mod>.jl/src/<Mod>.jl
                         if isfile(joinpath(dir, pname))
                             endswith(pname, ".jl") && push!(suggestions, pname[1:end-3])
                         else
-                            push!(suggestions, pname)
+                            mod_name = if endswith(pname, ".jl")
+                                pname[1:end - 3]
+                            else
+                                pname
+                            end
+                            if isfile(joinpath(dir, pname, "src",
+                                               "$mod_name.jl"))
+                                push!(suggestions, mod_name)
+                            end
                         end
                     end
                 end

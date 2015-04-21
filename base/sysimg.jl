@@ -3,13 +3,13 @@ ccall(:jl_new_main_module, Any, ())
 
 baremodule Base
 
-eval(x) = Core.eval(Base,x)
-eval(m,x) = Core.eval(m,x)
+using Core: Intrinsics, arraylen, arrayref, arrayset, arraysize, _expr,
+            kwcall, _apply, typeassert, apply_type, svec
 
 include = Core.include
 
-using Core: Intrinsics, arraylen, arrayref, arrayset, arraysize, _expr,
-            tuplelen, tupleref, kwcall, _apply, typeassert, apply_type
+eval(x) = Core.eval(Base,x)
+eval(m,x) = Core.eval(m,x)
 
 include("exports.jl")
 
@@ -261,9 +261,11 @@ include("sparse.jl")
 importall .SparseMatrix
 
 # signal processing
-include("fftw.jl")
-include("dsp.jl")
-importall .DSP
+if USE_GPL_LIBS
+    include("fftw.jl")
+    include("dsp.jl")
+    importall .DSP
+end
 
 # system information
 include("sysinfo.jl")

@@ -1,6 +1,6 @@
 ## 1-dimensional ranges ##
 
-typealias Dims (Int...)
+typealias Dims Tuple{Vararg{Int}}
 
 abstract Range{T} <: AbstractArray{T,1}
 
@@ -217,7 +217,7 @@ function linspace{T<:FloatingPoint}(start::T, stop::T, len::T)
     if a*n/s == start && c*n/s == stop
         return LinSpace(a, c, len, s)
     end
-    error("linspace($start, $stop, $len): cannot be constructed")
+    return LinSpace(start, stop, len, n)
 end
 function linspace{T<:FloatingPoint}(start::T, stop::T, len::Real)
     T_len = convert(T, len)
@@ -241,7 +241,7 @@ logspace(start::Real, stop::Real, n::Integer=50) = 10.^linspace(start, stop, n)
 
 ## interface implementations
 
-similar(r::Range, T::Type, dims::(Integer...)) = Array(T, dims...)
+similar(r::Range, T::Type, dims::Tuple{Vararg{Integer}}) = Array(T, dims...)
 similar(r::Range, T::Type, dims::Dims) = Array(T, dims)
 
 size(r::Range) = (length(r),)
@@ -626,6 +626,17 @@ function sum{T<:Real}(r::Range{T})
     return l * first(r) + (iseven(l) ? (step(r) * (l-1)) * (l>>1)
                                      : (step(r) * l) * ((l-1)>>1))
 end
+
+function sum(r::FloatRange)
+    l = length(r)
+    if iseven(l)
+        s = r.step * (l-1) * (l>>1)
+    else
+        s = (r.step * l) * ((l-1)>>1)
+    end
+    return (l * r.start + s)/r.divisor
+end
+
 
 function mean{T<:Real}(r::Range{T})
     isempty(r) && throw(ArgumentError("mean of an empty range is undefined"))

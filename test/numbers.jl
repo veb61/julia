@@ -375,7 +375,18 @@ end
 @test base(12,typemax(Int128)) == "2a695925806818735399a37a20a31b3534a7"
 
 @test hex2num("3ff0000000000000") == 1.
+@test hex2num("bff0000000000000") == -1.
 @test hex2num("4000000000000000") == 2.
+@test hex2num("7ff0000000000000") == Inf
+@test hex2num("fff0000000000000") == -Inf
+@test isnan(hex2num("7ff8000000000000"))
+@test isnan(hex2num("fff8000000000000"))
+@test hex2num("3f800000") == 1.0f0
+@test hex2num("bf800000") == -1.0f0
+@test hex2num("7f800000") == Inf32
+@test hex2num("ff800000") == -Inf32
+@test isnan(hex2num("7fc00000"))
+@test isnan(hex2num("ffc00000"))
 
 # floating-point printing
 @test repr(1.0) == "1.0"
@@ -391,6 +402,15 @@ end
 @test repr(NaN) == "NaN"
 @test repr(-NaN) == "NaN"
 @test repr(Float64(pi)) == "3.141592653589793"
+# issue 6608
+@test sprint(showcompact, 666666.6) == "6.66667e5"
+@test sprint(showcompact, 666666.049) == "666666.0"
+@test sprint(showcompact, 666665.951) == "666666.0"
+@test sprint(showcompact, 66.66666) == "66.6667"
+@test sprint(showcompact, -666666.6) == "-6.66667e5"
+@test sprint(showcompact, -666666.049) == "-666666.0"
+@test sprint(showcompact, -666665.951) == "-666666.0"
+@test sprint(showcompact, -66.66666) == "-66.6667"
 
 @test repr(1.0f0) == "1.0f0"
 @test repr(-1.0f0) == "-1.0f0"

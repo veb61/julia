@@ -200,9 +200,9 @@ end
 @deprecate median!(v::AbstractVector; checknan::Bool=true)  median!(v)
 
 @deprecate Dict{K,V}(ks::AbstractArray{K}, vs::AbstractArray{V}) Dict{K,V}(zip(ks, vs))
-@deprecate Dict{K,V}(ks::(K...), vs::(V...))                     Dict{K,V}(zip(ks, vs))
-@deprecate Dict{K}(ks::(K...), vs::Tuple)                        Dict{K,Any}(zip(ks, vs))
-@deprecate Dict{V}(ks::Tuple, vs::(V...))                        Dict{Any,V}(zip(ks, vs))
+@deprecate Dict{K,V}(ks::Tuple{Vararg{K}}, vs::Tuple{Vararg{V}}) Dict{K,V}(zip(ks, vs))
+@deprecate Dict{K}(ks::Tuple{Vararg{K}}, vs::Tuple)              Dict{K,Any}(zip(ks, vs))
+@deprecate Dict{V}(ks::Tuple, vs::Tuple{Vararg{V}})              Dict{Any,V}(zip(ks, vs))
 @deprecate Dict(ks, vs)                                          Dict{Any,Any}(zip(ks, vs))
 
 @deprecate itrunc{T<:Integer}(::Type{T}, n::Integer) (n % T)
@@ -296,22 +296,22 @@ const MemoryError = OutOfMemoryError
 @deprecate filter!(r::Regex, d::Dict) filter!((k,v)->ismatch(r,k), d)
 
 # 1470
-@deprecate integer(s::AbstractString)   parseint(Int,s)
-@deprecate unsigned(s::AbstractString)  parseint(UInt,s)
-@deprecate int(s::AbstractString)       parseint(Int,s)
-@deprecate uint(s::AbstractString)      parseint(UInt,s)
-@deprecate int8(s::AbstractString)      parseint(Int8,s)
-@deprecate uint8(s::AbstractString)     parseint(UInt8,s)
-@deprecate int16(s::AbstractString)     parseint(Int16,s)
-@deprecate uint16(s::AbstractString)    parseint(UInt16,s)
-@deprecate int32(s::AbstractString)     parseint(Int32,s)
-@deprecate uint32(s::AbstractString)    parseint(UInt32,s)
-@deprecate int64(s::AbstractString)     parseint(Int64,s)
-@deprecate uint64(s::AbstractString)    parseint(UInt64,s)
-@deprecate int128(s::AbstractString)    parseint(Int128,s)
-@deprecate uint128(s::AbstractString)   parseint(UInt128,s)
-@deprecate float64(s::AbstractString)   parsefloat(Float64,s)
-@deprecate float32(s::AbstractString)   parsefloat(Float32,s)
+@deprecate integer(s::AbstractString)   parse(Int,s)
+@deprecate unsigned(s::AbstractString)  parse(UInt,s)
+@deprecate int(s::AbstractString)       parse(Int,s)
+@deprecate uint(s::AbstractString)      parse(UInt,s)
+@deprecate int8(s::AbstractString)      parse(Int8,s)
+@deprecate uint8(s::AbstractString)     parse(UInt8,s)
+@deprecate int16(s::AbstractString)     parse(Int16,s)
+@deprecate uint16(s::AbstractString)    parse(UInt16,s)
+@deprecate int32(s::AbstractString)     parse(Int32,s)
+@deprecate uint32(s::AbstractString)    parse(UInt32,s)
+@deprecate int64(s::AbstractString)     parse(Int64,s)
+@deprecate uint64(s::AbstractString)    parse(UInt64,s)
+@deprecate int128(s::AbstractString)    parse(Int128,s)
+@deprecate uint128(s::AbstractString)   parse(UInt128,s)
+@deprecate float64(s::AbstractString)   parse(Float64,s)
+@deprecate float32(s::AbstractString)   parse(Float32,s)
 
 for (f,t) in ((:integer, Integer), (:signed, Signed),
               (:unsigned, Unsigned), (:int, Int), (:int8, Int8), (:int16, Int16),
@@ -438,6 +438,11 @@ end
 @deprecate dlsym        Libdl.dlsym
 @deprecate dlsym_e      Libdl.dlsym_e
 @deprecate find_library Libdl.find_library
+
+@deprecate cholfact(A::AbstractMatrix, β::Number) cholfact(A, shift=β)
+@deprecate ldltfact(A::AbstractMatrix, β::Number) ldltfact(A, shift=β)
+
+@deprecate with_env(f::Function, key::AbstractString, val) withenv(f, key=>val)
 
 # 0.4 discontinued functions
 

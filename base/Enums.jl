@@ -35,7 +35,7 @@ macro enum(T,syms...)
     else
         throw(ArgumentError("invalid type expression for enum $T"))
     end
-    vals = Array((Symbol,Integer),0)
+    vals = Array(Tuple{Symbol,Integer},0)
     lo = hi = 0
     i = -1
     enumT = typeof(i)
@@ -101,6 +101,7 @@ macro enum(T,syms...)
         Base.next{E<:$(esc(typename))}(x::Type{E},s) = (E($values[s]),s+1)
         Base.done{E<:$(esc(typename))}(x::Type{E},s) = s > $(length(values))
         Base.names{E<:$(esc(typename))}(x::Type{E}) = [$(map(x->Meta.quot(x[1]), vals)...)]
+        Base.isless{E<:$(esc(typename))}(x::E, y::E) = isless(x.val, y.val)
         function Base.print{E<:$(esc(typename))}(io::IO,x::E)
             for (sym, i) in $vals
                 if i == x.val

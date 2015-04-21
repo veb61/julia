@@ -468,7 +468,7 @@ function del_client(pg, id, client)
     nothing
 end
 
-function del_clients(pairs::(Any,Any)...)
+function del_clients(pairs::Tuple{Any,Any}...)
     for p in pairs
         del_client(p[1], p[2])
     end
@@ -504,7 +504,7 @@ function add_client(id, client)
     nothing
 end
 
-function add_clients(pairs::(Any,Any)...)
+function add_clients(pairs::Tuple{Any,Any}...)
     for p in pairs
         add_client(p[1], p[2])
     end
@@ -793,7 +793,7 @@ end
 function process_messages(r_stream::TCPSocket, w_stream::TCPSocket; kwargs...)
     @schedule begin
         disable_nagle(r_stream)
-        start_reading(r_stream)
+        Base.start_reading(r_stream)
         wait_connected(r_stream)
         if r_stream != w_stream
             disable_nagle(w_stream)
@@ -1523,6 +1523,7 @@ end
 
 
 function timedwait(testcb::Function, secs::Float64; pollint::Float64=0.1)
+    pollint > 0 || throw(ArgumentError("cannot set pollint to $pollint seconds"))
     start = time()
     done = RemoteRef()
     timercb(aw) = begin

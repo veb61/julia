@@ -40,6 +40,10 @@
       This function raises an error under operating systems that do not support
       soft symbolic links, such as Windows XP.
 
+.. function:: readlink(path) -> AbstractString
+
+   Returns the value of a symbolic link ``path``.
+
 .. function:: chmod(path, mode)
 
    Change the permissions mode of ``path`` to ``mode``. Only integer ``mode``\ s
@@ -249,6 +253,13 @@
 .. function:: realpath(path::AbstractString) -> AbstractString
 
    Canonicalize a path by expanding symbolic links and removing "." and ".." entries.
+
+.. function:: relpath(path::AbstractString, startpath::AbstractString = ".") -> AbstractString
+
+   Return a relative filepath to path either from the current directory or from an optional
+   start directory.
+   This is a path computation: the filesystem is not accessed to confirm the existence or
+   nature of path or startpath.
 
 .. function:: expanduser(path::AbstractString) -> AbstractString
 

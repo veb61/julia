@@ -8,9 +8,9 @@ typealias DenseVector{T} DenseArray{T,1}
 typealias DenseMatrix{T} DenseArray{T,2}
 typealias DenseVecOrMat{T} Union(DenseVector{T}, DenseMatrix{T})
 
-typealias StridedArray{T,N,A<:DenseArray,I<:(RangeIndex...)} Union(DenseArray{T,N}, SubArray{T,N,A,I})
-typealias StridedVector{T,A<:DenseArray,I<:(RangeIndex...)}  Union(DenseArray{T,1}, SubArray{T,1,A,I})
-typealias StridedMatrix{T,A<:DenseArray,I<:(RangeIndex...)}  Union(DenseArray{T,2}, SubArray{T,2,A,I})
+typealias StridedArray{T,N,A<:DenseArray,I<:Tuple{Vararg{RangeIndex}}} Union(DenseArray{T,N}, SubArray{T,N,A,I})
+typealias StridedVector{T,A<:DenseArray,I<:Tuple{Vararg{RangeIndex}}}  Union(DenseArray{T,1}, SubArray{T,1,A,I})
+typealias StridedMatrix{T,A<:DenseArray,I<:Tuple{Vararg{RangeIndex}}}  Union(DenseArray{T,2}, SubArray{T,2,A,I})
 typealias StridedVecOrMat{T} Union(StridedVector{T}, StridedMatrix{T})
 
 call{T}(::Type{Vector{T}}, m::Integer) = Array{T}(m)
@@ -41,9 +41,14 @@ end
 cconvert{P<:Ptr,T<:Ptr}(::Union(Type{Ptr{P}},Type{Ref{P}}), a::Array{T}) = a
 cconvert{P<:Ptr}(::Union(Type{Ptr{P}},Type{Ref{P}}), a::Array) = Ref{P}(a)
 
-size(a::Array) = arraysize(a)
 size(a::Array, d) = arraysize(a, d)
+size(a::Vector) = (arraysize(a,1),)
 size(a::Matrix) = (arraysize(a,1), arraysize(a,2))
+size{_}(a::Array{_,3}) = (arraysize(a,1), arraysize(a,2), arraysize(a,3))
+size{_}(a::Array{_,4}) = (arraysize(a,1), arraysize(a,2), arraysize(a,3), arraysize(a,4))
+asize_from(a::Array, n) = n > ndims(a) ? () : (arraysize(a,n), asize_from(a, n+1)...)
+size{_,N}(a::Array{_,N}) = asize_from(a, 1)::NTuple{N,Int}
+
 length(a::Array) = arraylen(a)
 elsize{T}(a::Array{T}) = isbits(T) ? sizeof(T) : sizeof(Ptr)
 sizeof(a::Array) = elsize(a) * length(a)
@@ -148,7 +153,7 @@ similar{T}(a::Array{T,2}, m::Int)     = Array(T, m)
 similar{T}(a::Array{T,2}, S)          = Array(S, size(a,1), size(a,2))
 
 # T[x...] constructs Array{T,1}
-function getindex(T::NonTupleType, vals...)
+function getindex(T::Type, vals...)
     a = Array(T,length(vals))
     @inbounds for i = 1:length(vals)
         a[i] = vals[i]
@@ -158,14 +163,6 @@ end
 
 function getindex(::Type{Any}, vals::ANY...)
     a = Array(Any,length(vals))
-    @inbounds for i = 1:length(vals)
-        a[i] = vals[i]
-    end
-    return a
-end
-
-function getindex(T::(Type...), vals::Tuple...)
-    a = Array(T,length(vals))
     @inbounds for i = 1:length(vals)
         a[i] = vals[i]
     end
@@ -207,7 +204,7 @@ function fill!{T<:Union(Integer,FloatingPoint)}(a::Array{T}, x)
         ccall(:memset, Ptr{Void}, (Ptr{Void}, Cint, Csize_t),
               a, 0, length(a)*sizeof(T))
     else
-        for i = 1:length(a)
+        for i in eachindex(a)
             @inbounds a[i] = xT
         end
     end
@@ -218,7 +215,7 @@ fill(v, dims::Dims)       = fill!(Array(typeof(v), dims), v)
 fill(v, dims::Integer...) = fill!(Array(typeof(v), dims...), v)
 
 cell(dims::Integer...)   = Array(Any, dims...)
-cell(dims::(Integer...)) = Array(Any, convert((Int...), dims))
+cell(dims::Tuple{Vararg{Integer}}) = Array(Any, convert(Tuple{Vararg{Int}}, dims))
 
 for (fname, felt) in ((:zeros,:zero), (:ones,:one))
     @eval begin
@@ -325,7 +322,7 @@ end
 # sure about the behaviour and use unsafe_getindex; in the general case
 # we can't and must use getindex, otherwise silent corruption can happen)
 
-stagedfunction getindex_bool_1d(A::Array, I::AbstractArray{Bool})
+@generated function getindex_bool_1d(A::Array, I::AbstractArray{Bool})
     idxop = I <: Union(Array{Bool}, BitArray) ? :unsafe_getindex : :getindex
     quote
         checkbounds(A, I)
@@ -404,7 +401,7 @@ end
 # sure about the behaviour and use unsafe_getindex; in the general case
 # we can't and must use getindex, otherwise silent corruption can happen)
 
-stagedfunction assign_bool_scalar_1d!(A::Array, x, I::AbstractArray{Bool})
+@generated function assign_bool_scalar_1d!(A::Array, x, I::AbstractArray{Bool})
     idxop = I <: Union(Array{Bool}, BitArray) ? :unsafe_getindex : :getindex
     quote
         checkbounds(A, I)
@@ -417,7 +414,7 @@ stagedfunction assign_bool_scalar_1d!(A::Array, x, I::AbstractArray{Bool})
     end
 end
 
-stagedfunction assign_bool_vector_1d!(A::Array, X::AbstractArray, I::AbstractArray{Bool})
+@generated function assign_bool_vector_1d!(A::Array, X::AbstractArray, I::AbstractArray{Bool})
     idxop = I <: Union(Array{Bool}, BitArray) ? :unsafe_getindex : :getindex
     quote
         checkbounds(A, I)
@@ -706,7 +703,7 @@ end
 ## Unary operators ##
 
 function conj!{T<:Number}(A::AbstractArray{T})
-    for i=1:length(A)
+    for i in eachindex(A)
         A[i] = conj(A[i])
     end
     return A
@@ -716,7 +713,7 @@ for f in (:-, :~, :conj, :sign)
     @eval begin
         function ($f)(A::StridedArray)
             F = similar(A)
-            for i=1:length(A)
+            for i in eachindex(A)
                 F[i] = ($f)(A[i])
             end
             return F
@@ -724,7 +721,7 @@ for f in (:-, :~, :conj, :sign)
     end
 end
 
-(-)(A::StridedArray{Bool}) = reshape([ -A[i] for i=1:length(A) ], size(A))
+(-)(A::StridedArray{Bool}) = reshape([ -A[i] for i in eachindex(A) ], size(A))
 
 real(A::StridedArray) = reshape([ real(x) for x in A ], size(A))
 imag(A::StridedArray) = reshape([ imag(x) for x in A ], size(A))
@@ -733,7 +730,7 @@ imag{T<:Real}(x::StridedArray{T}) = zero(x)
 
 function !(A::StridedArray{Bool})
     F = similar(A)
-    for i=1:length(A)
+    for i in eachindex(A)
         F[i] = !A[i]
     end
     return F
@@ -792,7 +789,7 @@ for f in (:+, :-, :div, :mod, :&, :|, :$)
         end
         function ($f){S,T}(A::AbstractArray{S}, B::AbstractArray{T})
             F = similar(A, promote_type(S,T), promote_shape(size(A),size(B)))
-            for i=1:length(A)
+            for i in eachindex(A,B)
                 @inbounds F[i] = ($f)(A[i], B[i])
             end
             return F
@@ -803,14 +800,14 @@ for f in (:.+, :.-, :.*, :.%, :.<<, :.>>, :div, :mod, :rem, :&, :|, :$)
     @eval begin
         function ($f){T}(A::Number, B::AbstractArray{T})
             F = similar(B, promote_array_type(typeof(A),T))
-            for i=1:length(B)
+            for i in eachindex(B)
                 @inbounds F[i] = ($f)(A, B[i])
             end
             return F
         end
         function ($f){T}(A::AbstractArray{T}, B::Number)
             F = similar(A, promote_array_type(typeof(B),T))
-            for i=1:length(A)
+            for i in eachindex(A)
                 @inbounds F[i] = ($f)(A[i], B)
             end
             return F
@@ -833,14 +830,14 @@ for f in (:.+, :.-)
     @eval begin
         function ($f)(A::Bool, B::StridedArray{Bool})
             F = similar(B, Int, size(B))
-            for i=1:length(B)
+            for i in eachindex(B)
                 @inbounds F[i] = ($f)(A, B[i])
             end
             return F
         end
         function ($f)(A::StridedArray{Bool}, B::Bool)
             F = similar(A, Int, size(A))
-            for i=1:length(A)
+            for i in eachindex(A)
                 @inbounds F[i] = ($f)(A[i], B)
             end
             return F
@@ -851,7 +848,7 @@ for f in (:+, :-)
     @eval begin
         function ($f)(A::StridedArray{Bool}, B::StridedArray{Bool})
             F = similar(A, Int, promote_shape(size(A), size(B)))
-            for i=1:length(A)
+            for i in eachindex(A,B)
                 @inbounds F[i] = ($f)(A[i], B[i])
             end
             return F
@@ -864,7 +861,7 @@ end
 function complex{S<:Real,T<:Real}(A::Array{S}, B::Array{T})
     if size(A) != size(B); throw(DimensionMismatch()); end
     F = similar(A, typeof(complex(zero(S),zero(T))))
-    for i=1:length(A)
+    for i in eachindex(A)
         @inbounds F[i] = complex(A[i], B[i])
     end
     return F
@@ -872,7 +869,7 @@ end
 
 function complex{T<:Real}(A::Real, B::Array{T})
     F = similar(B, typeof(complex(A,zero(T))))
-    for i=1:length(B)
+    for i in eachindex(B)
         @inbounds F[i] = complex(A, B[i])
     end
     return F
@@ -880,7 +877,7 @@ end
 
 function complex{T<:Real}(A::Array{T}, B::Real)
     F = similar(A, typeof(complex(zero(T),B)))
-    for i=1:length(A)
+    for i in eachindex(A)
         @inbounds F[i] = complex(A[i], B)
     end
     return F
@@ -1289,7 +1286,7 @@ function indcopy(sz::Dims, I::Vector)
     dst, src
 end
 
-function indcopy(sz::Dims, I::(RangeIndex...))
+function indcopy(sz::Dims, I::Tuple{Vararg{RangeIndex}})
     n = length(I)
     s = sz[n]
     for i = n+1:length(sz)

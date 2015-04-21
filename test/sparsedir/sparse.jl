@@ -74,6 +74,7 @@ for i = 1:5
 end
 
 # complex matrix-vector multiplication and left-division
+if Base.USE_GPL_LIBS
 for i = 1:5
     a = speye(5) + 0.1*sprandn(5, 5, 0.2)
     b = randn(5,3) + im*randn(5,3)
@@ -145,6 +146,7 @@ for i = 1:5
     @test (maximum(abs(a\b - full(a)\b)) < 1000*eps())
     @test (maximum(abs(a'\b - full(a')\b)) < 1000*eps())
     @test (maximum(abs(a.'\b - full(a.')\b)) < 1000*eps())
+end
 end
 
 # matrix multiplication and kron
@@ -705,9 +707,11 @@ let D = Diagonal(ones(10,10)),
 end
 
 # explicit zeros
+if Base.USE_GPL_LIBS
 a = SparseMatrixCSC(2, 2, [1, 3, 5], [1, 2, 1, 2], [1.0, 0.0, 0.0, 1.0])
 @test_approx_eq lufact(a)\[2.0, 3.0] [2.0, 3.0]
 @test_approx_eq cholfact(a)\[2.0, 3.0] [2.0, 3.0]
+end
 
 # issue #10113
 let S = spzeros(5,1), I = [false,true,false,true,false]
@@ -741,5 +745,67 @@ for (m,n) in ((2,-2),(-2,2),(-2,-2))
     @test_throws ArgumentError sprand(m,n,0.2)
 end
 
+# issue #10837
+# test sparse constructors from special matrices
+T = Tridiagonal(randn(4),randn(5),randn(4))
+S = sparse(T)
+@test norm(full(T) - full(S)) == 0.0
+T = SymTridiagonal(randn(5),rand(4))
+S = sparse(T)
+@test norm(full(T) - full(S)) == 0.0
+B = Bidiagonal(randn(5),randn(4),true)
+S = sparse(B)
+@test norm(full(B) - full(S)) == 0.0
+B = Bidiagonal(randn(5),randn(4),false)
+S = sparse(B)
+@test norm(full(B) - full(S)) == 0.0
+
 # promotion in spdiagm
 @test spdiagm(([1,2],[3.5],[4+5im]), (0,1,-1), 2,2) == [1 3.5; 4+5im 2]
+
+#Test broadcasting of sparse matrixes
+let  A = sprand(10,10,0.3), B = sprand(10,10,0.3), AF = full(A), BF = full(B)
+    @test A .* B == AF .* BF
+    @test A[1,:] .* B == AF[1,:] .* BF
+    @test A[:,1] .* B == AF[:,1] .* BF
+    @test A .* B[1,:] == AF .*  BF[1,:]
+    @test A .* B[:,1] == AF .*  BF[:,1]
+
+    @test A .* B == AF .* BF
+    @test A[1,:] .* BF == AF[1,:] .* BF
+    @test A[:,1] .* BF == AF[:,1] .* BF
+    @test A .* BF[1,:] == AF .*  BF[1,:]
+    @test A .* BF[:,1] == AF .*  BF[:,1]
+
+    @test A .* B == AF .* BF
+    @test AF[1,:] .* B == AF[1,:] .* BF
+    @test AF[:,1] .* B == AF[:,1] .* BF
+    @test AF .* B[1,:] == AF .*  BF[1,:]
+    @test AF .* B[:,1] == AF .*  BF[:,1]
+
+    @test A .* B == AF .* BF
+    @test A[1,:] .* B == AF[1,:] .* BF
+    @test A[:,1] .* B == AF[:,1] .* BF
+    @test A .* B[1,:] == AF .*  BF[1,:]
+    @test A .* B[:,1] == AF .*  BF[:,1]
+
+    @test A .* 3 == AF .* 3
+    @test 3 .* A == 3 .* AF
+    #@test A[1,:] .* 3 == AF[1,:] .* 3
+    @test all(A[1,:] .* 3 .== AF[1,:] .* 3)
+    #@test A[:,1] .* 3 == AF[:,1] .* 3
+    @test all(A[:,1] .* 3 .== AF[:,1] .* 3)
+    #TODO: simple comparation with == returns false because the left side is a (two-dimensional) SparseMatrixCSC
+    #      while the right side is a Vector
+
+
+    @test A .- B == AF .- BF
+    @test A[1,:] .- B == AF[1,:] .- BF
+    @test A[:,1] .- B == AF[:,1] .- BF
+    @test A .- B[1,:] == AF .-  BF[1,:]
+    @test A .- B[:,1] == AF .-  BF[:,1]
+
+    @test A .+ B == AF .+ BF
+    @test (A .< B) == (AF .< BF)
+    @test (A .!= B) == (AF .!= BF)
+end

@@ -380,7 +380,7 @@ end
 # we can't and must use getindex, otherwise silent corruption can happen)
 # (multiple signatures for disambiguation)
 for IT in [AbstractVector{Bool}, AbstractArray{Bool}]
-    @eval stagedfunction getindex(B::BitArray, I::$IT)
+    @eval @generated function getindex(B::BitArray, I::$IT)
         idxop = I <: Union(Array{Bool}, BitArray) ? :unsafe_getindex : :getindex
         quote
             checkbounds(B, I)
@@ -446,7 +446,7 @@ function setindex!(B::BitArray, x, I::BitArray)
     return B
 end
 
-stagedfunction setindex!(B::BitArray, x, I::AbstractArray{Bool})
+@generated function setindex!(B::BitArray, x, I::AbstractArray{Bool})
     idxop = I <: Array{Bool} ? :unsafe_getindex : :getindex
     quote
         checkbounds(B, I)
@@ -493,7 +493,7 @@ function setindex!(B::BitArray, X::AbstractArray, I::BitArray)
     return B
 end
 
-stagedfunction setindex!(B::BitArray, X::AbstractArray, I::AbstractArray{Bool})
+@generated function setindex!(B::BitArray, X::AbstractArray, I::AbstractArray{Bool})
     idxop = I <: Array{Bool} ? :unsafe_getindex : :getindex
     quote
         checkbounds(B, I)
@@ -1808,7 +1808,7 @@ function cat(catdim::Integer, X::Union(BitArray, Integer)...)
         end
     end
     # just integers and no BitArrays -> general case
-    has_bitarray || return invoke(cat, (Integer, Any...), catdim, X...)
+    has_bitarray || return invoke(cat, Tuple{Integer, Vararg{Any}}, catdim, X...)
     dimsX = map((a->isa(a,BitArray) ? size(a) : (1,)), X)
     ndimsX = map((a->isa(a,BitArray) ? ndims(a) : 1), X)
     d_max = maximum(ndimsX)
@@ -1842,7 +1842,7 @@ function cat(catdim::Integer, X::Union(BitArray, Integer)...)
     end
 
     ndimsC = max(catdim, d_max)
-    dimsC = ntuple(ndimsC, compute_dims)::(Int...)
+    dimsC = ntuple(ndimsC, compute_dims)::Tuple{Vararg{Int}}
     typeC = promote_type(map(x->isa(x,BitArray) ? eltype(x) : typeof(x), X)...)
     if !has_integer || typeC == Bool
         C = BitArray(dimsC)

@@ -98,7 +98,7 @@ centralize_sumabs2(A::AbstractArray, m::Number) =
 centralize_sumabs2(A::AbstractArray, m::Number, ifirst::Int, ilast::Int) =
     mapreduce_impl(CentralizedAbs2Fun(m), AddFun(), A, ifirst, ilast)
 
-stagedfunction centralize_sumabs2!{S,T,N}(R::AbstractArray{S}, A::AbstractArray{T,N}, means::AbstractArray)
+@generated function centralize_sumabs2!{S,T,N}(R::AbstractArray{S}, A::AbstractArray{T,N}, means::AbstractArray)
     quote
         # following the implementation of _mapreducedim! at base/reducedim.jl
         lsiz = check_reducedims(R,A)
@@ -190,7 +190,7 @@ end
 ##### standard deviation #####
 
 function sqrt!(A::AbstractArray)
-    for i = 1:length(A)
+    for i in eachindex(A)
         @inbounds A[i] = sqrt(A[i])
     end
     A
@@ -657,4 +657,3 @@ hist2d(v::AbstractMatrix, n1::Integer, n2::Integer) =
     hist2d(v, histrange(sub(v,:,1),n1), histrange(sub(v,:,2),n2))
 hist2d(v::AbstractMatrix, n::Integer) = hist2d(v, n, n)
 hist2d(v::AbstractMatrix) = hist2d(v, sturges(size(v,1)))
-

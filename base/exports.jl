@@ -1008,6 +1008,7 @@ export
     task_local_storage,
     unlock,
     yield,
+    yieldto,
 
 # time
     sleep,
@@ -1170,10 +1171,7 @@ export
     serialize,
     skip,
     skipchars,
-    start_reading,
     start_timer,
-    start_watching,
-    stop_reading,
     stop_timer,
     takebuf_array,
     takebuf_string,
@@ -1244,6 +1242,7 @@ export
     joinpath,
     normpath,
     realpath,
+    relpath,
     splitdir,
     splitdrive,
     splitext,
@@ -1280,6 +1279,7 @@ export
     mv,
     operm,
     pwd,
+    readlink,
     rm,
     stat,
     symlink,
@@ -1300,6 +1300,7 @@ export
     setenv,
     spawn,
     success,
+    withenv,
 
 # C interface
     cfunction,
@@ -1386,6 +1387,7 @@ export
     @parallel,
 
     # metaprogramming utilities
+    @generated,
     @gensym,
     @eval,
     @vectorize_1arg,

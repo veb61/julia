@@ -25,11 +25,11 @@ function fullname(m::Module)
     return tuple(fullname(mp)..., mn)
 end
 
-names(m::Module, all::Bool, imported::Bool) = ccall(:jl_module_names, Array{Symbol,1}, (Any,Int32,Int32), m, all, imported)
+names(m::Module, all::Bool, imported::Bool) = sort!(ccall(:jl_module_names, Array{Symbol,1}, (Any,Int32,Int32), m, all, imported))
 names(m::Module, all::Bool) = names(m, all, false)
 names(m::Module) = names(m, false, false)
 
-fieldnames(t::DataType) = collect(t.names)
+fieldnames(t::DataType) = Symbol[n for n in t.name.names ]
 function fieldnames(v)
     t = typeof(v)
     if !isa(t,DataType)
@@ -38,19 +38,9 @@ function fieldnames(v)
     return fieldnames(t)
 end
 
-fieldname(t::DataType, i::Integer) = t.names[i]
+fieldname(t::DataType, i::Integer) = t.name.names[i]::Symbol
 
-nfields(t::DataType) = length(t.names)
-function nfields(v)
-    t = typeof(v)
-    if !isa(DataType)
-        throw(ArgumentError("cannot call nfields() on a non-composite type"))
-    end
-    return nfields(t)
-end
-
-isconst(s::Symbol) =
-    ccall(:jl_is_const, Int32, (Ptr{Void}, Any), C_NULL, s) != 0
+isconst(s::Symbol) = ccall(:jl_is_const, Int32, (Ptr{Void}, Any), C_NULL, s) != 0
 
 isconst(m::Module, s::Symbol) =
     ccall(:jl_is_const, Int32, (Any, Any), m, s) != 0
@@ -100,13 +90,21 @@ isgeneric(f::ANY) = (isa(f,Function) && isa(f.env,MethodTable))
 
 function_name(f::Function) = isgeneric(f) ? f.env.name : (:anonymous)
 
-code_lowered(f::Function,t::(Type...)) = map(m->uncompressed_ast(m.func.code), methods(f,t))
+tt_cons(t::ANY, tup::ANY) = Tuple{t, tup.parameters...}
+
+code_lowered(f::Function, t::ANY) = map(m->uncompressed_ast(m.func.code), methods(f,t))
 methods(f::Function,t::ANY) = Any[m[3] for m in _methods(f,t,-1)]
-methods(f::ANY,t::ANY) = methods(call, tuple(isa(f,Type) ? Type{f} : typeof(f), t...))
-_methods(f::ANY,t::ANY,lim) = _methods(f, Any[(t::Tuple)...], length(t::Tuple), lim, [])
+methods(f::ANY,t::ANY) = methods(call, tt_cons(isa(f,Type) ? Type{f} : typeof(f), t))
+function _methods(f::ANY,t::ANY,lim)
+    if isa(t,Type)
+        _methods(f, Any[t.parameters...], length(t.parameters), lim, [])
+    else
+        _methods(f, Any[t...], length(t), lim, [])
+    end
+end
 function _methods(f::ANY,t::Array,i,lim::Integer,matching::Array{Any,1})
     if i == 0
-        new = ccall(:jl_matching_methods, Any, (Any,Any,Int32), f, tuple(t...), lim)
+        new = ccall(:jl_matching_methods, Any, (Any,Any,Int32), f, Tuple{t...}, lim)
         if new === false
             return false
         end
@@ -136,12 +134,12 @@ function methods(f::Function)
     f.env
 end
 
-methods(x::ANY) = methods(call, (isa(x,Type) ? Type{x} : typeof(x), Any...))
+methods(x::ANY) = methods(call, Tuple{isa(x,Type) ? Type{x} : typeof(x), Vararg{Any}})
 
 function length(mt::MethodTable)
     n = 0
     d = mt.defs
-    while !is(d,())
+    while !is(d,nothing)
         n += 1
         d = d.next
     end
@@ -151,12 +149,14 @@ end
 start(mt::MethodTable) = mt.defs
 next(mt::MethodTable, m::Method) = (m,m.next)
 done(mt::MethodTable, m::Method) = false
-done(mt::MethodTable, i::()) = true
+done(mt::MethodTable, i::Void) = true
 
 uncompressed_ast(l::LambdaStaticData) =
     isa(l.ast,Expr) ? l.ast : ccall(:jl_uncompress_ast, Any, (Any,Any), l, l.ast)
 
 # Printing code representations in IR and assembly
+_dump_function(f, t::Tuple{Vararg{Type}}, native, wrapper, strip_ir_metadata) =
+    _dump_function(f, Tuple{t...}, native, wrapper, strip_ir_metadata)
 function _dump_function(f, t::ANY, native, wrapper, strip_ir_metadata)
     llvmf = ccall(:jl_get_llvmf, Ptr{Void}, (Any, Any, Bool), f, t, wrapper)
 
@@ -174,15 +174,16 @@ function _dump_function(f, t::ANY, native, wrapper, strip_ir_metadata)
     return str
 end
 
-code_llvm(io::IO, f::Function, types::(Type...), strip_ir_metadata = true) =
+code_llvm(io::IO, f::Function, types::ANY, strip_ir_metadata = true) =
     print(io, _dump_function(f, types, false, false, strip_ir_metadata))
-code_llvm(f::Function, types::(Type...)) = code_llvm(STDOUT, f, types)
-code_llvm_raw(f::Function, types::(Type...)) = code_llvm(STDOUT, f, types, false)
+code_llvm(f::Function, types::ANY) = code_llvm(STDOUT, f, types)
+code_llvm_raw(f::Function, types::ANY) = code_llvm(STDOUT, f, types, false)
 
-code_native(io::IO, f::Function, types::(Type...)) = print(io, _dump_function(f, types, true, false, false))
-code_native(f::Function, types::(Type...)) = code_native(STDOUT, f, types)
+code_native(io::IO, f::Function, types::ANY) = print(io, _dump_function(f, types, true, false, false))
+code_native(f::Function, types::ANY) = code_native(STDOUT, f, types)
 
-function which(f::ANY, t::(Type...))
+which(f::ANY, t::Tuple{Vararg{Type}}) = which(f, Tuple{t...})
+function which(f::ANY, t::ANY)
     if isleaftype(t)
         ms = methods(f, t)
         isempty(ms) && error("no method found for the specified argument types")
@@ -190,7 +191,7 @@ function which(f::ANY, t::(Type...))
         ms[1]
     else
         if !isa(f,Function)
-            t = tuple(isa(f,Type) ? Type{f} : typeof(f), t...)
+            t = Tuple{isa(f,Type) ? Type{f} : typeof(f), t.parameters...}
             f = call
         elseif !isgeneric(f)
             throw(ArgumentError("argument is not a generic function"))
@@ -203,6 +204,8 @@ function which(f::ANY, t::(Type...))
     end
 end
 
+which(s::Symbol) = binding_module(current_module(), s)
+
 function functionloc(m::Method)
     lsd = m.func.code::LambdaStaticData
     ln = lsd.line
@@ -212,7 +215,7 @@ function functionloc(m::Method)
     (find_source_file(string(lsd.file)), ln)
 end
 
-functionloc(f::ANY, types) = functionloc(which(f,types))
+functionloc(f::ANY, types::ANY) = functionloc(which(f,types))
 
 function functionloc(f)
     m = methods(f)
@@ -222,7 +225,7 @@ function functionloc(f)
     functionloc(m.defs)
 end
 
-function function_module(f, types)
+function function_module(f, types::ANY)
     m = methods(f, types)
     if isempty(m)
         error("no matching methods")
@@ -234,3 +237,13 @@ end
 
 type_alignment(x::DataType) = ccall(:jl_get_alignment,Csize_t,(Any,),x)
 field_offset(x::DataType,idx) = ccall(:jl_get_field_offset,Csize_t,(Any,Int32),x,idx)
+
+binding_module(var::Symbol) = binding_module(current_module(), var)
+function binding_module(m::Module, var::Symbol)
+    if isdefined(m, var) # this returns true for 'used' bindings
+        mod = ccall(:jl_get_module_of_binding, Any, (Any, Any), m, var)
+    else
+        error("Symbol $var is not bound in the module $m and not exported by any module 'used' within $m.")
+    end
+    mod
+end

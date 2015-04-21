@@ -143,7 +143,6 @@ extern size_t jl_page_size;
 jl_datatype_t *jl_task_type;
 DLLEXPORT JL_THREAD jl_task_t * volatile jl_current_task;
 JL_THREAD jl_task_t *jl_root_task;
-JL_THREAD jl_value_t * volatile jl_task_arg_in_transit;
 JL_THREAD jl_value_t *jl_exception_in_transit;
 #ifdef JL_GC_MARKSWEEP
 JL_THREAD jl_gcframe_t *jl_pgcstack = NULL;
@@ -322,7 +321,8 @@ static void ctx_switch(jl_task_t *t, jl_jmp_buf *where)
 #ifdef COPY_STACKS
         if (t->stkbuf) {
             restore_stack(t, where, NULL);
-        } else {
+        }
+        else {
 #ifdef ASM_COPY_STACKS
             void *stackbase = jl_stackbase;
 #ifdef _CPU_X86_64_
@@ -356,21 +356,21 @@ static void ctx_switch(jl_task_t *t, jl_jmp_buf *where)
     //JL_SIGATOMIC_END();
 }
 
+JL_THREAD jl_value_t * volatile jl_task_arg_in_transit;
 extern int jl_in_gc;
-static jl_value_t *switchto(jl_task_t *t)
+DLLEXPORT jl_value_t *jl_switchto(jl_task_t *t, jl_value_t *arg)
 {
     if (t->state == done_sym || t->state == failed_sym) {
-        jl_task_arg_in_transit = (jl_value_t*)jl_null;
         if (t->exception != jl_nothing)
             jl_throw(t->exception);
         return t->result;
     }
-    if (jl_in_gc) {
+    if (jl_in_gc)
         jl_error("task switch not allowed from inside gc finalizer");
-    }
+    jl_task_arg_in_transit = arg;
     ctx_switch(t, &t->ctx);
     jl_value_t *val = jl_task_arg_in_transit;
-    jl_task_arg_in_transit = (jl_value_t*)jl_null;
+    jl_task_arg_in_transit = jl_nothing;
     if (jl_current_task->exception != NULL &&
         jl_current_task->exception != jl_nothing) {
         jl_value_t *exc = jl_current_task->exception;
@@ -460,12 +460,6 @@ static void rebase_state(jl_jmp_buf *ctx, intptr_t local_sp, intptr_t new_sp)
 }
 
 #endif /* !COPY_STACKS */
-
-jl_value_t *jl_switchto(jl_task_t *t, jl_value_t *arg)
-{
-    jl_task_arg_in_transit = arg;
-    return switchto(t);
-}
 
 ptrint_t bt_data[MAX_BT_SIZE+1];
 size_t bt_size = 0;
@@ -699,11 +693,11 @@ static void record_backtrace(void)
 static jl_value_t *array_ptr_void_type = NULL;
 DLLEXPORT jl_value_t *jl_backtrace_from_here(void)
 {
-    jl_tuple_t *tp = NULL;
+    jl_svec_t *tp = NULL;
     jl_array_t *bt = NULL;
     JL_GC_PUSH2(&tp, &bt);
     if (array_ptr_void_type == NULL) {
-        tp = jl_tuple2(jl_voidpointer_type, jl_box_long(1));
+        tp = jl_svec2(jl_voidpointer_type, jl_box_long(1));
         array_ptr_void_type = jl_apply_type((jl_value_t*)jl_array_type, tp);
     }
     bt = jl_alloc_array_1d(array_ptr_void_type, MAX_BT_SIZE);
@@ -721,26 +715,26 @@ DLLEXPORT jl_value_t *jl_lookup_code_address(void *ip, int skipC)
     const char *file_name;
     int fromC = frame_info_from_ip(&func_name, &line_num, &file_name, (size_t)ip, skipC);
     if (func_name != NULL) {
-        jl_value_t *r = (jl_value_t*)jl_alloc_tuple(5);
+        jl_value_t *r = (jl_value_t*)jl_alloc_svec(5);
         JL_GC_PUSH1(&r);
-        jl_tupleset(r, 0, jl_symbol(func_name));
-        jl_tupleset(r, 1, jl_symbol(file_name));
-        jl_tupleset(r, 2, jl_box_long(line_num));
-        jl_tupleset(r, 3, jl_box_bool(fromC));
-        jl_tupleset(r, 4, jl_box_long((intptr_t)ip));
+        jl_svecset(r, 0, jl_symbol(func_name));
+        jl_svecset(r, 1, jl_symbol(file_name));
+        jl_svecset(r, 2, jl_box_long(line_num));
+        jl_svecset(r, 3, jl_box_bool(fromC));
+        jl_svecset(r, 4, jl_box_long((intptr_t)ip));
         JL_GC_POP();
         return r;
     }
-    return (jl_value_t*)jl_null;
+    return jl_nothing;
 }
 
 DLLEXPORT jl_value_t *jl_get_backtrace(void)
 {
-    jl_tuple_t *tp = NULL;
+    jl_svec_t *tp = NULL;
     jl_array_t *bt = NULL;
     JL_GC_PUSH2(&tp, &bt);
     if (array_ptr_void_type == NULL) {
-        tp = jl_tuple2(jl_voidpointer_type, jl_box_long(1));
+        tp = jl_svec2(jl_voidpointer_type, jl_box_long(1));
         array_ptr_void_type = jl_apply_type((jl_value_t*)jl_array_type, tp);
     }
     bt = jl_alloc_array_1d(array_ptr_void_type, bt_size);
@@ -881,23 +875,7 @@ JL_CALLABLE(jl_unprotect_stack)
     // unprotect stack so it can be reallocated for something else
     mprotect(stk, jl_page_size-1, PROT_READ|PROT_WRITE|PROT_EXEC);
 #endif
-    return (jl_value_t*)jl_null;
-}
-
-JL_CALLABLE(jl_f_yieldto)
-{
-    JL_NARGSV(yieldto, 1);
-    JL_TYPECHK(yieldto, task, args[0]);
-    if (nargs == 2) {
-        jl_task_arg_in_transit = args[1];
-    }
-    else if (nargs > 2) {
-        jl_task_arg_in_transit = jl_f_tuple(NULL, &args[1], nargs-1);
-    }
-    else {
-        jl_task_arg_in_transit = (jl_value_t*)jl_null;
-    }
-    return switchto((jl_task_t*)args[0]);
+    return jl_nothing;
 }
 
 DLLEXPORT jl_value_t *jl_get_current_task(void)
@@ -913,8 +891,8 @@ void jl_init_tasks(void)
     _probe_arch();
     jl_task_type = jl_new_datatype(jl_symbol("Task"),
                                    jl_any_type,
-                                   jl_null,
-                                   jl_tuple(9,
+                                   jl_emptysvec,
+                                   jl_svec(9,
                                             jl_symbol("parent"),
                                             jl_symbol("last"),
                                             jl_symbol("storage"),
@@ -924,19 +902,19 @@ void jl_init_tasks(void)
                                             jl_symbol("result"),
                                             jl_symbol("exception"),
                                             jl_symbol("code")),
-                                   jl_tuple(9,
+                                   jl_svec(9,
                                             jl_any_type, jl_any_type,
                                             jl_any_type, jl_sym_type,
                                             jl_any_type, jl_any_type,
                                             jl_any_type, jl_any_type, jl_function_type),
                                    0, 1, 0);
-    jl_tupleset(jl_task_type->types, 0, (jl_value_t*)jl_task_type);
+    jl_svecset(jl_task_type->types, 0, (jl_value_t*)jl_task_type);
 
     done_sym = jl_symbol("done");
     failed_sym = jl_symbol("failed");
     runnable_sym = jl_symbol("runnable");
 
-    jl_unprotect_stack_func = jl_new_closure(jl_unprotect_stack, (jl_value_t*)jl_null, NULL);
+    jl_unprotect_stack_func = jl_new_closure(jl_unprotect_stack, (jl_value_t*)jl_emptysvec, NULL);
 }
 
 // Initialize a root task using the given stack.
@@ -969,8 +947,8 @@ void jl_init_root_task(void *stack, size_t ssize)
 
     jl_root_task = jl_current_task;
 
-    jl_exception_in_transit = (jl_value_t*)jl_null;
-    jl_task_arg_in_transit = (jl_value_t*)jl_null;
+    jl_exception_in_transit = (jl_value_t*)jl_nothing;
+    jl_task_arg_in_transit = (jl_value_t*)jl_nothing;
 }
 
 #ifdef __cplusplus

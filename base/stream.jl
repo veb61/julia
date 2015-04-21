@@ -223,7 +223,7 @@ show(io::IO,stream::TTY) = print(io,"TTY(",uv_status_string(stream),", ",
 function println(io::AsyncStream, xs...)
     lock(io.lock)
     try
-        invoke(println, tuple(IO, typeof(xs)...), io, xs...)
+        invoke(println, Tuple{IO, map(typeof,xs)...}, io, xs...)
     finally
         unlock(io.lock)
     end
@@ -502,6 +502,9 @@ function _uv_hook_asynccb(async::AsyncWork)
 end
 
 function start_timer(timer::Timer, timeout::Real, repeat::Real)
+    timeout ≥ 0 || throw(ArgumentError("timer cannot have negative timeout of $timeout seconds"))
+    repeat ≥ 0 || throw(ArgumentError("timer cannot repeat $repeat times"))
+
     associate_julia_struct(timer.handle, timer)
     preserve_handle(timer)
     ccall(:uv_update_time,Void,(Ptr{Void},),eventloop())
@@ -520,6 +523,7 @@ function stop_timer(timer::Timer)
 end
 
 function sleep(sec::Real)
+    sec ≥ 0 || throw(ArgumentError("cannot sleep for $sec seconds"))
     w = Condition()
     timer = Timer(function (tmr)
         notify(w)

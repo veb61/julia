@@ -44,6 +44,8 @@ debug && println("\ntype of a: ", eltya, " type of b: ", eltyb, "\n")
 
 debug && println("(Automatic) upper Cholesky factor")
 
+        @inferred cholfact(apd)
+        @inferred chol(apd)
         capd  = factorize(apd)
         r     = capd[:U]
         κ     = cond(apd, 1) #condition number
@@ -67,10 +69,10 @@ debug && println("(Automatic) upper Cholesky factor")
         @test_approx_eq apd * inv(capd) eye(n)
         @test norm(a*(capd\(a'*b)) - b,1)/norm(b,1) <= ε*κ*n # Ad hoc, revisit
         @test abs((det(capd) - det(apd))/det(capd)) <= ε*κ*n # Ad hoc, but statistically verified, revisit
-        @test_approx_eq logdet(capd) log(det(capd)) # logdet is less likely to overflow
+        @test_approx_eq @inferred(logdet(capd)) log(det(capd)) # logdet is less likely to overflow
 
         apos = apd[1,1]            # test chol(x::Number), needs x>0
-        @test_approx_eq cholfact(apos).UL √apos
+        @test_approx_eq cholfact(apos).factors √apos
 
         # test chol of 2x2 Strang matrix
         S = convert(AbstractMatrix{eltya},full(SymTridiagonal([2,2],[-1])))
@@ -87,7 +89,7 @@ debug && println("pivoted Choleksy decomposition")
         if eltya != BigFloat && eltyb != BigFloat # Note! Need to implement pivoted cholesky decomposition in julia
             cpapd = cholfact(apd, :U, Val{true})
             @test rank(cpapd) == n
-            @test all(diff(diag(real(cpapd.UL))).<=0.) # diagonal should be non-increasing
+            @test all(diff(diag(real(cpapd.factors))).<=0.) # diagonal should be non-increasing
             @test norm(apd * (cpapd\b) - b)/norm(b) <= ε*κ*n # Ad hoc, revisit
             if isreal(apd)
                 @test_approx_eq apd * inv(cpapd) eye(n)
@@ -101,8 +103,8 @@ begin
     # Cholesky factor of Matrix with non-commutative elements, here 2x2-matrices
 
     X = Matrix{Float64}[0.1*rand(2,2) for i in 1:3, j = 1:3]
-    L = full(Base.LinAlg.chol!(X*X', :L))
-    U = full(Base.LinAlg.chol!(X*X', :U))
+    L = full(Base.LinAlg.chol!(X*X', Val{:L}))
+    U = full(Base.LinAlg.chol!(X*X', Val{:U}))
     XX = full(X*X')
 
     @test sum(sum(norm, L*L' - XX)) < eps()
