@@ -180,8 +180,8 @@ end
 finalize(o::ANY) = ccall(:jl_finalize, Void, (Any,), o)
 
 gc(full::Bool=true) = ccall(:jl_gc_collect, Void, (Cint,), full)
-gc_enable() = Bool(ccall(:jl_gc_enable, Cint, ()))
-gc_disable() = Bool(ccall(:jl_gc_disable, Cint, ()))
+gc_enable() = ccall(:jl_gc_enable, Cint, ())!=0
+gc_disable() = ccall(:jl_gc_disable, Cint, ())!=0
 
 bytestring(str::ByteString) = str
 
@@ -296,7 +296,9 @@ function getindex(v::SimpleVector, i::Int)
     if !(1 <= i <= length(v))
         throw(BoundsError(v,i))
     end
-    unsafe_load(convert(Ptr{Any},data_pointer_from_objref(v)) + i*sizeof(Ptr))
+    x = unsafe_load(convert(Ptr{Ptr{Void}},data_pointer_from_objref(v)) + i*sizeof(Ptr))
+    x == C_NULL && throw(UndefRefError())
+    return unsafe_pointer_to_objref(x)
 end
 
 length(v::SimpleVector) = v.length
