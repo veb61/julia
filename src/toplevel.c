@@ -314,11 +314,12 @@ static jl_module_t *eval_import_path_(jl_array_t *args, int retrying)
         if (jl_binding_resolved_p(m, var)) {
             jl_binding_t *mb = jl_get_binding(m, var);
             jl_module_t *m0 = m;
+            int isimp = jl_is_imported(m, var);
             assert(mb != NULL);
-            if (mb->owner == m0 || mb->imported) {
+            if (mb->owner == m0 || isimp) {
                 m = (jl_module_t*)mb->value;
                 if ((mb->owner == m0 && m != NULL && !jl_is_module(m)) ||
-                    (mb->imported && (m == NULL || !jl_is_module(m))))
+                    (isimp && (m == NULL || !jl_is_module(m))))
                     jl_errorf("invalid module path (%s does not name a module)", var->name);
                 // If the binding has been resolved but is (1) undefined, and (2) owned
                 // by the module we're importing into, then allow the import into the
@@ -621,7 +622,8 @@ void jl_set_datatype_super(jl_datatype_t *tt, jl_value_t *super)
     tt->super = (jl_datatype_t*)super;
     gc_wb(tt, tt->super);
     if (jl_svec_len(tt->parameters) > 0) {
-        tt->name->cache = (jl_value_t*)jl_emptysvec;
+        tt->name->cache = jl_emptysvec;
+        tt->name->linearcache = jl_emptysvec;
         jl_reinstantiate_inner_types(tt);
     }
 }

@@ -125,11 +125,7 @@ static Value *uint_cnvt(Type *to, Value *x)
     return builder.CreateZExt(x, to);
 }
 
-#ifdef LLVM33
-    #define LLVM_FP(a,b) APFloat(a,b)
-#else
-    #define LLVM_FP(a,b) APFloat(b,true)
-#endif
+#define LLVM_FP(a,b) APFloat(a,b)
 static Constant *julia_const_to_llvm(jl_value_t *e)
 {
     jl_value_t *jt = jl_typeof(e);
@@ -640,15 +636,14 @@ static Value *emit_pointerref(jl_value_t *e, jl_value_t *i, jl_codectx_t *ctx)
         uint64_t size = jl_datatype_size(ety);
         Value *strct =
             builder.CreateCall(prepare_call(jlallocobj_func),
-                               ConstantInt::get(T_size,
-                                    sizeof(void*)+size));
+                               ConstantInt::get(T_size, sizeof(void*)+size));
         builder.CreateStore(literal_pointer_val((jl_value_t*)ety),
                             emit_typeptr_addr(strct));
         im1 = builder.CreateMul(im1, ConstantInt::get(T_size,
                     LLT_ALIGN(size, ((jl_datatype_t*)ety)->alignment)));
         thePtr = builder.CreateGEP(builder.CreateBitCast(thePtr, T_pint8), im1);
         builder.CreateMemCpy(builder.CreateBitCast(strct, T_pint8),
-                            thePtr, size, 1);
+                             thePtr, size, 1);
         return mark_julia_type(strct, ety);
     }
     // TODO: alignment?
@@ -1140,18 +1135,6 @@ static Value *emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
         return builder.CreateCall(
             Intrinsic::getDeclaration(jl_Module, Intrinsic::ctpop,
                                       ArrayRef<Type*>(x->getType())), x);
-#if !defined(LLVM_VERSION_MAJOR) || (LLVM_VERSION_MAJOR == 3 && LLVM_VERSION_MINOR == 0)
-    HANDLE(ctlz_int,1)
-        x = JL_INT(x);
-        return builder.CreateCall(
-            Intrinsic::getDeclaration(jl_Module, Intrinsic::ctlz,
-                                      ArrayRef<Type*>(x->getType())), x);
-    HANDLE(cttz_int,1)
-        x = JL_INT(x);
-        return builder.CreateCall(
-            Intrinsic::getDeclaration(jl_Module, Intrinsic::cttz,
-                                      ArrayRef<Type*>(x->getType())), x);
-#elif LLVM_VERSION_MAJOR==3 && LLVM_VERSION_MINOR >= 1
     HANDLE(ctlz_int,1) {
         x = JL_INT(x);
         Type *types[1] = {x->getType()};
@@ -1165,7 +1148,6 @@ static Value *emit_intrinsic(intrinsic f, jl_value_t **args, size_t nargs,
         return builder.CreateCall2(
             Intrinsic::getDeclaration(jl_Module, Intrinsic::cttz, ArrayRef<Type*>(types)), x, ConstantInt::get(T_int1, 0));
     }
-#endif
 
     HANDLE(nan_dom_err,2) {
         // nan_dom_err(f, x) throw DomainError if isnan(f)&&!isnan(x)

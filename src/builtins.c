@@ -375,7 +375,6 @@ JL_CALLABLE(jl_f_typeassert)
 }
 
 static jl_function_t *jl_append_any_func;
-extern size_t jl_page_size;
 
 JL_CALLABLE(jl_f_apply)
 {
@@ -616,11 +615,21 @@ JL_CALLABLE(jl_f_tuple)
 {
     size_t i;
     if (nargs == 0) return (jl_value_t*)jl_emptytuple;
-    jl_value_t **types = alloca(nargs*sizeof(jl_value_t*));
-    for(i=0; i < nargs; i++) {
-        types[i] = jl_typeof(args[i]);
+    jl_datatype_t *tt;
+    if (nargs < jl_page_size/sizeof(jl_value_t*)) {
+        jl_value_t **types = alloca(nargs*sizeof(jl_value_t*));
+        for(i=0; i < nargs; i++)
+            types[i] = jl_typeof(args[i]);
+        tt = jl_inst_concrete_tupletype_v(types, nargs);
     }
-    jl_datatype_t *tt = jl_inst_concrete_tupletype(types, nargs);
+    else {
+        jl_svec_t *types = jl_alloc_svec_uninit(nargs);
+        JL_GC_PUSH1(&types);
+        for(i=0; i < nargs; i++)
+            jl_svecset(types, i, jl_typeof(args[i]));
+        tt = jl_inst_concrete_tupletype(types);
+        JL_GC_POP();
+    }
     return jl_new_structv(tt, args, nargs);
 }
 
@@ -1164,6 +1173,12 @@ DLLEXPORT uptrint_t jl_object_id(jl_value_t *v)
     if (dt == jl_datatype_type) {
         jl_datatype_t *dtv = (jl_datatype_t*)v;
         uptrint_t h = 0xda1ada1a;
+        // has_typevars always returns 0 on name->primary, so that type
+        // can exist in the cache. however, interpreter.c mutates its
+        // typevars' `bound` fields to 0, corrupting the cache. this is
+        // avoided simply by hashing name->primary specially here.
+        if (jl_egal(dtv->name->primary, v))
+            return bitmix(bitmix(h, dtv->name->uid), 0xaa5566aa);
         return bitmix(bitmix(h, dtv->name->uid),
                       jl_object_id((jl_value_t*)dtv->parameters));
     }
@@ -1328,12 +1343,12 @@ size_t jl_static_show_x(JL_STREAM *out, jl_value_t *v, int depth)
     else if (jl_is_lambda_info(v)) {
         jl_lambda_info_t *li = (jl_lambda_info_t*)v;
         n += jl_static_show_x(out, (jl_value_t*)li->module, depth);
-        n += jl_printf(out, ".%s", li->name->name);
         if (li->specTypes) {
-            n += jl_static_show_x(out, (jl_value_t*)li->specTypes, depth);
+            n += jl_printf(out, ".");
+            n += jl_show_svec(out, li->specTypes->parameters, li->name->name);
         }
         else {
-            n += jl_printf(out, "(?)");
+            n += jl_printf(out, ".%s(?)", li->name->name);
         }
         // The following is nice for debugging, but allocates memory and generates a lot of output
         // so it may not be a good idea to to have it active
@@ -1593,7 +1608,7 @@ DLLEXPORT void jl_(void *jl_value)
 {
     in_jl_++;
     JL_TRY {
-        (void)jl_static_show(JL_STDOUT, (jl_value_t*)jl_value);
+        (void)jl_static_show((JL_STREAM*)STDERR_FILENO, (jl_value_t*)jl_value);
         jl_printf(JL_STDOUT,"\n");
     }
     JL_CATCH {

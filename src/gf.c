@@ -19,6 +19,23 @@
 extern "C" {
 #endif
 
+static jl_value_t *jl_apply_unspecialized(jl_function_t *meth, jl_value_t **args, uint32_t nargs)
+{
+    jl_function_t *unspecialized = meth->linfo->unspecialized;
+    assert(unspecialized != jl_bottom_func);
+    if (meth->env == (jl_value_t*)jl_emptysvec) {
+        return jl_apply(unspecialized, args, nargs);
+    }
+    else {
+        jl_function_t *closuremeth = jl_new_closure(unspecialized->fptr, meth->env, unspecialized->linfo);
+        JL_GC_PUSH1(&closuremeth);
+        jl_value_t *v = jl_apply(closuremeth, args, nargs);
+        JL_GC_POP();
+        return v;
+    }
+}
+
+
 static jl_methtable_t *new_method_table(jl_sym_t *name)
 {
     jl_methtable_t *mt = (jl_methtable_t*)allocobj(sizeof(jl_methtable_t));
@@ -492,7 +509,7 @@ static jl_function_t *cache_method(jl_methtable_t *mt, jl_tupletype_t *type,
         jl_value_t *elt = jl_tparam(type,i);
         jl_value_t *decl_i = jl_nth_slot_type(decl,i);
         if (jl_is_type_type(elt) && jl_is_tuple_type(jl_tparam0(elt)) &&
-            !jl_is_type_type(decl_i)) {
+            !(jl_subtype(decl_i, (jl_value_t*)jl_type_type, 0) && !is_kind(decl_i))) {
             jl_methlist_t *curr = mt->defs;
             int ok=1;
             while (curr != (void*)jl_nothing) {
@@ -832,11 +849,11 @@ static jl_function_t *cache_method(jl_methtable_t *mt, jl_tupletype_t *type,
         return newmeth;
     }
     else {
-        if (jl_options.compile_enabled == 0) {
+        if (jl_options.compile_enabled == JL_OPTIONS_COMPILE_OFF) {
             if (method->linfo->unspecialized == NULL) {
                 jl_printf(JL_STDERR,"code missing for %s", method->linfo->name->name);
                 jl_static_show(JL_STDERR, (jl_value_t*)type);
-                jl_printf(JL_STDERR, "\n");
+                jl_printf(JL_STDERR, "  sysimg may not have been built with --compile=all\n");
                 exit(1);
             }
             jl_function_t *unspec = method->linfo->unspecialized;
@@ -882,6 +899,8 @@ static jl_function_t *cache_method(jl_methtable_t *mt, jl_tupletype_t *type,
         if (method->linfo->unspecialized == NULL) {
             method->linfo->unspecialized =
                 jl_instantiate_method(method, jl_emptysvec);
+            if (method->env != (jl_value_t*)jl_emptysvec)
+                method->linfo->unspecialized->env = NULL;
             gc_wb(method->linfo, method->linfo->unspecialized);
         }
         newmeth->linfo->unspecialized = method->linfo->unspecialized;
@@ -1385,18 +1404,34 @@ void NORETURN jl_no_method_error(jl_function_t *f, jl_value_t **args, size_t na)
 
 static jl_tupletype_t *arg_type_tuple(jl_value_t **args, size_t nargs)
 {
-    jl_value_t **types;
-    JL_GC_PUSHARGS(types, nargs);
+    jl_tupletype_t *tt;
     size_t i;
-    for(i=0; i < nargs; i++) {
-        jl_value_t *ai = args[i];
-        if (jl_is_type(ai))
-            types[i] = (jl_value_t*)jl_wrap_Type(ai);
-        else
-            types[i] = jl_typeof(ai);
+    if (nargs < jl_page_size/sizeof(jl_value_t*)) {
+        jl_value_t **types;
+        JL_GC_PUSHARGS(types, nargs);
+        for(i=0; i < nargs; i++) {
+            jl_value_t *ai = args[i];
+            if (jl_is_type(ai))
+                types[i] = (jl_value_t*)jl_wrap_Type(ai);
+            else
+                types[i] = jl_typeof(ai);
+        }
+        tt = (jl_tupletype_t*)jl_inst_concrete_tupletype_v(types, nargs);
+        JL_GC_POP();
     }
-    jl_tupletype_t *tt = (jl_tupletype_t*)jl_inst_concrete_tupletype(types, nargs);
-    JL_GC_POP();
+    else {
+        jl_svec_t *types = jl_alloc_svec(nargs);
+        JL_GC_PUSH1(&types);
+        for(i=0; i < nargs; i++) {
+            jl_value_t *ai = args[i];
+            if (jl_is_type(ai))
+                jl_svecset(types, i, (jl_value_t*)jl_wrap_Type(ai));
+            else
+                jl_svecset(types, i, jl_typeof(ai));
+        }
+        tt = (jl_tupletype_t*)jl_inst_concrete_tupletype(types);
+        JL_GC_POP();
+    }
     return tt;
 }
 
@@ -1538,6 +1573,8 @@ void jl_compile_all_defs(jl_function_t *gf)
         }
         else if (m->func->linfo->unspecialized == NULL) {
             jl_function_t *func = jl_instantiate_method(m->func, jl_emptysvec);
+            if (func->env != (jl_value_t*)jl_emptysvec)
+                func->env = NULL;
             m->func->linfo->unspecialized = func;
             gc_wb(m->func->linfo, func);
             precompile_unspecialized(func, m->sig, m->tvars);
@@ -1576,9 +1613,12 @@ static void _compile_all(jl_module_t *m, htable_t *h)
             jl_value_t *el = jl_cellref(m->constant_table,i);
             if (jl_is_lambda_info(el)) {
                 jl_lambda_info_t *li = (jl_lambda_info_t*)el;
-                jl_function_t *func = jl_new_closure(li->fptr, (jl_value_t*)jl_emptysvec, li);
-                li->unspecialized = func;
-                gc_wb(li, func);
+                jl_function_t *func = li->unspecialized;
+                if (func == NULL) {
+                    func = jl_new_closure(li->fptr, (jl_value_t*)jl_emptysvec, li);
+                    li->unspecialized = func;
+                    gc_wb(li, func);
+                }
                 precompile_unspecialized(func, NULL, jl_emptysvec);
             }
         }
@@ -1646,10 +1686,11 @@ JL_CALLABLE(jl_apply_generic)
             jl_lambda_info_t *li = mfunc->linfo;
             if (li->unspecialized == NULL) {
                 li->unspecialized = jl_instantiate_method(mfunc, li->sparams);
+                if (mfunc->env != (jl_value_t*)jl_emptysvec)
+                    li->unspecialized->env = NULL;
                 gc_wb(li, li->unspecialized);
             }
-            mfunc = li->unspecialized;
-            assert(mfunc != jl_bottom_func);
+            return jl_apply_unspecialized(mfunc, args, nargs);
         }
         assert(!mfunc->linfo || !mfunc->linfo->inInference);
         return jl_apply(mfunc, args, nargs);
@@ -1743,9 +1784,11 @@ jl_value_t *jl_gf_invoke(jl_function_t *gf, jl_tupletype_t *types,
             jl_lambda_info_t *li = mfunc->linfo;
             if (li->unspecialized == NULL) {
                 li->unspecialized = jl_instantiate_method(mfunc, li->sparams);
+                if (mfunc->env != (jl_value_t*)jl_emptysvec)
+                    li->unspecialized->env = NULL;
                 gc_wb(li, li->unspecialized);
             }
-            mfunc = li->unspecialized;
+            return jl_apply_unspecialized(mfunc, args, nargs);
         }
     }
     else {

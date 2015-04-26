@@ -101,9 +101,6 @@ typedef struct {
 #endif
         };
     };
-#ifdef _P64
-    uintptr_t realign16;
-#endif
     jl_value_t value;
 } jl_taggedvalue_t;
 
@@ -115,9 +112,6 @@ typedef struct {
 static inline void jl_set_typeof(void *v, void *t)
 {
     jl_taggedvalue_t *tag = jl_astaggedvalue(v);
-#ifdef _P64
-    tag->realign16 = 0xA1164A1164A11640ull;
-#endif
     tag->type = (jl_value_t*)t;
 }
 #define jl_typeis(v,t) (jl_typeof(v)==(jl_value_t*)(t))
@@ -250,7 +244,8 @@ typedef struct {
     // a type alias, for example, might make a type constructor that is
     // not the original.
     jl_value_t *primary;
-    jl_value_t *cache;
+    jl_svec_t *cache;        // sorted array
+    jl_svec_t *linearcache;  // unsorted array
     ptrint_t uid;
 } jl_typename_t;
 
@@ -557,6 +552,7 @@ void jl_gc_free_array(jl_array_t *a);
 void jl_gc_track_malloced_array(jl_array_t *a);
 void jl_gc_count_allocd(size_t sz);
 void jl_gc_run_all_finalizers(void);
+DLLEXPORT jl_value_t *alloc_0w(void);
 DLLEXPORT jl_value_t *alloc_1w(void);
 DLLEXPORT jl_value_t *alloc_2w(void);
 DLLEXPORT jl_value_t *alloc_3w(void);
@@ -1079,6 +1075,7 @@ DLLEXPORT void jl_module_use(jl_module_t *to, jl_module_t *from, jl_sym_t *s);
 DLLEXPORT void jl_module_import(jl_module_t *to, jl_module_t *from, jl_sym_t *s);
 DLLEXPORT void jl_module_importall(jl_module_t *to, jl_module_t *from);
 DLLEXPORT void jl_module_export(jl_module_t *from, jl_sym_t *s);
+DLLEXPORT int jl_is_imported(jl_module_t *m, jl_sym_t *s);
 DLLEXPORT jl_module_t *jl_new_main_module(void);
 DLLEXPORT void jl_add_standard_imports(jl_module_t *m);
 STATIC_INLINE jl_function_t *jl_get_function(jl_module_t *m, const char *name)

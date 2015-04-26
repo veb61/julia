@@ -64,11 +64,7 @@
 #include <llvm/Support/system_error.h>
 #endif
 #include <llvm/ExecutionEngine/JITEventListener.h>
-#ifdef LLVM33
 #include <llvm/IR/LLVMContext.h>
-#else
-#include <llvm/LLVMContext.h>
-#endif
 #ifdef LLVM37
 #include <llvm/DebugInfo/DWARF/DIContext.h>
 #else
@@ -76,10 +72,8 @@
 #endif
 #ifdef LLVM35
 #include <llvm/IR/DebugInfo.h>
-#elif defined(LLVM32)
-#include <llvm/DebugInfo.h>
 #else
-#include <llvm/Analysis/DebugInfo.h>
+#include <llvm/DebugInfo.h>
 #endif
 #ifndef LLVM37
 #define format_hex(v, d) format("%#0" #d "x", v)
@@ -518,10 +512,12 @@ void jl_dump_asm_internal(uintptr_t Fptr, size_t Fsize, size_t slide,
                 if (pass != 0)
 #if defined(_CPU_PPC_) || defined(_CPU_PPC64_)
                     stream << "\t.long " << format_hex(*(uint32_t*)(Fptr+Index), 10) << "\n";
-#else
+#elif defined(_CPU_X86_) || defined(_CPU_X86_64_)
                     SrcMgr.PrintMessage(SMLoc::getFromPointer((const char*)(Fptr + Index)),
                                         SourceMgr::DK_Warning,
                                         "invalid instruction encoding");
+#else
+                    stream << "\t.byte " << format_hex(*(uint8_t*)(Fptr+Index), 4) << "\n";
 #endif
                 if (insSize == 0) // skip illegible bytes
 #if defined(_CPU_PPC_) || defined(_CPU_PPC64_)
@@ -533,7 +529,7 @@ void jl_dump_asm_internal(uintptr_t Fptr, size_t Fsize, size_t slide,
 
             case MCDisassembler::SoftFail:
                 if (pass != 0)
-#if defined(_CPU_PPC_) || defined(_CPU_PPC64_)
+#if !defined(_CPU_X86_) || !defined(_CPU_X86_64_)
                     stream << "potentially undefined instruction encoding:\n";
 #else
                     SrcMgr.PrintMessage(SMLoc::getFromPointer((const char*)(Fptr + Index)),
